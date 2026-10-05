@@ -4,6 +4,10 @@ All driver implementations live in ``mobilerun-core-local`` (cloud ones
 behind its ``[cloud]`` extra). Framework code imports them from there
 directly; this package is kept only so the historical public
 ``mobilerun.tools.driver`` import path keeps working for external consumers.
+
+The one repo-local exception is ``mobilerun.tools.driver.android_world``:
+the AndroidWorld docker-server driver lives here because that HTTP API is
+project-specific, not part of the shared core package.
 """
 
 from mobilerun_core_local.driver.android import AndroidDriver

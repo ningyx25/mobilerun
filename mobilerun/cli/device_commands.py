@@ -35,6 +35,12 @@ from mobilerun.agent.utils.android_device import (
 from mobilerun.agent.utils.portal_setup import portal_version_kwargs
 from mobilerun.config_manager import ConfigLoader
 from mobilerun.log_handlers import configure_logging
+from mobilerun.tools.driver.android_world import (
+    ANDROID_WORLD_CONNECTION,
+    ANDROID_WORLD_DEFAULT_URL,
+    AndroidWorldHttpDriver,
+    looks_like_http_url,
+)
 from mobilerun.tools.filters import ConciseFilter
 from mobilerun.tools.formatters import IndexedFormatter
 from mobilerun.tools.ui.ios_provider import IOSStateProvider
@@ -184,6 +190,18 @@ async def _create_driver(
         driver = await create_ios_driver(url, token=config.device.resolve_auth_token())
         await driver.connect()
         return driver, True
+
+    # AndroidWorld docker server: explicit control_backend, or an http(s) URL
+    # in the serial (never a valid ADB serial). An explicit backend other than
+    # android-world keeps its existing behavior.
+    control_backend = (config.device.control_backend or "").strip().lower()
+    if control_backend == ANDROID_WORLD_CONNECTION or (
+        not control_backend and looks_like_http_url(config.device.serial)
+    ):
+        url = config.device.serial or ANDROID_WORLD_DEFAULT_URL
+        driver = AndroidWorldHttpDriver(url=url)
+        await driver.connect()
+        return driver, False
 
     serial = config.device.serial
     if is_portal_http_url(serial):

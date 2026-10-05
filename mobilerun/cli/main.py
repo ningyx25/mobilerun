@@ -79,6 +79,10 @@ from mobilerun.config_manager.credential_paths import (
 from mobilerun.log_handlers import CLILogHandler, configure_logging
 from mobilerun.macro.cli import macro_cli
 from mobilerun.telemetry import print_telemetry_message
+from mobilerun.tools.driver.android_world import (
+    ANDROID_WORLD_CONNECTION,
+    looks_like_http_url,
+)
 
 # Suppress all warnings
 warnings.filterwarnings("ignore")
@@ -356,7 +360,11 @@ async def _cleanup_android_keyboard(
 ) -> None:
     platform = (config.device.platform or "").lower()
     control_backend = (config.device.control_backend or "").lower()
-    if platform == "ios" or control_backend == VISUAL_REMOTE_CONNECTION:
+    if (
+        platform == "ios"
+        or control_backend in {VISUAL_REMOTE_CONNECTION, ANDROID_WORLD_CONNECTION}
+        or looks_like_http_url(config.device.serial)
+    ):
         return
 
     # Without a selected device the keyboard was never enabled.
@@ -549,7 +557,7 @@ except Exception:
 )
 @click.option(
     "--control-backend",
-    type=click.Choice([VISUAL_REMOTE_CONNECTION]),
+    type=click.Choice([VISUAL_REMOTE_CONNECTION, ANDROID_WORLD_CONNECTION]),
     default=None,
     help="Use a compatible visual remote backend instead of the platform default backend.",
 )
