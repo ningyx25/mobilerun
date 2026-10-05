@@ -126,9 +126,12 @@ llm_profiles:
 
 # === Device Settings ===
 device:
-  # Default device serial (null = auto-detect)
+  # Default device serial (null = auto-detect).
+  # For control_backend android-world, this is the environment server URL
+  # (e.g. http://localhost:5000); an http(s) URL here is auto-detected.
   serial: null
-  # Optional backend override. null = platform default, visual-remote = compatible screenshot/action server
+  # Optional backend override. null = platform default, visual-remote = compatible screenshot/action server,
+  # android-world = AndroidWorld docker environment server (serial = server URL)
   control_backend: null
   # Device id for backends that expose multiple devices
   device_id: auto

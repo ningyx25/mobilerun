@@ -88,6 +88,7 @@ def test_cloud_uuid_auto_routes_only_with_cloud_credential(monkeypatch):
                 platform="android",
                 auto_setup=False,
                 portal_mode="auto",
+                control_backend=None,
             )
         ),
     )
