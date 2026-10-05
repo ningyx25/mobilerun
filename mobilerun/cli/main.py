@@ -560,7 +560,11 @@ except Exception:
     "--control-backend",
     type=click.Choice([VISUAL_REMOTE_CONNECTION, ANDROID_WORLD_CONNECTION]),
     default=None,
-    help="Use a compatible visual remote backend instead of the platform default backend.",
+    help=(
+        "Device backend instead of the platform default: 'visual-remote' "
+        "(compatible screenshot/action server) or 'android-world' "
+        "(AndroidWorld environment server; --device is its URL)."
+    ),
 )
 @click.option(
     "--device-id",
@@ -642,7 +646,9 @@ async def run(
     help="AndroidWorld environment server URL (default http://localhost:5000)",
 )
 @click.option("--config", "-c", "config_path", help="Path to config file", default=None)
-@click.option("--tasks", default=None, help="Comma-separated task names to run (default: all)")
+@click.option(
+    "--tasks", default=None, help="Comma-separated task names to run (default: all)"
+)
 @click.option(
     "--task-index-range",
     default=None,
@@ -654,29 +660,84 @@ async def run(
     multiple=True,
     help="Only run tasks of these difficulties",
 )
-@click.option("--task-idx", type=int, default=0, show_default=True, help="Suite instance index to run per task")
-@click.option("--steps", type=int, default=None, help="Max steps per task (default: 10 x task complexity)")
-@click.option("--seed", type=int, default=None, help="Reinitialize the server suite with this seed")
-@click.option("--n-task-combinations", type=int, default=None, help="Instances per task when reinitializing the suite")
-@click.option("--output", "-o", default=None, help="Results JSON path (default runs/androidworld_<timestamp>.json)")
-@click.option("--resume", is_flag=True, default=False, help="Skip tasks already recorded in the output file")
-@click.option("--health-timeout", type=float, default=300.0, show_default=True, help="Seconds to wait for the server to become healthy")
-@click.option("--task-timeout", type=float, default=1000.0, show_default=True, help="Workflow timeout per task (seconds)")
+@click.option(
+    "--task-idx",
+    type=int,
+    default=0,
+    show_default=True,
+    help="Suite instance index to run per task",
+)
+@click.option(
+    "--steps",
+    type=int,
+    default=None,
+    help="Max steps per task (default: 10 x task complexity)",
+)
+@click.option(
+    "--seed",
+    type=int,
+    default=None,
+    help="Reinitialize the server suite with this seed",
+)
+@click.option(
+    "--n-task-combinations",
+    type=int,
+    default=None,
+    help="Instances per task when reinitializing the suite",
+)
+@click.option(
+    "--output",
+    "-o",
+    default=None,
+    help="Results JSON path (default runs/androidworld_<timestamp>.json)",
+)
+@click.option(
+    "--resume",
+    is_flag=True,
+    default=False,
+    help="Skip tasks already recorded in the output file",
+)
+@click.option(
+    "--health-timeout",
+    type=float,
+    default=900.0,
+    show_default=True,
+    help="Seconds to wait for the server to become healthy (a cold container needs 5-10 min to boot)",
+)
+@click.option(
+    "--task-timeout",
+    type=float,
+    default=1000.0,
+    show_default=True,
+    help="Workflow timeout per task (seconds)",
+)
 @click.option(
     "--save-trajectory",
     type=click.Choice(["none", "step", "action"]),
     default=None,
     help="Trajectory saving level",
 )
-@click.option("--telemetry/--no-telemetry", default=False, help="Send telemetry events during the benchmark")
-@click.option("--provider", default=None, help="LLM provider (defaults to the config profile)")
+@click.option(
+    "--telemetry/--no-telemetry",
+    default=False,
+    help="Send telemetry events during the benchmark",
+)
+@click.option(
+    "--provider", default=None, help="LLM provider (defaults to the config profile)"
+)
 @click.option("--model", default=None, help="LLM model")
 @click.option("--base-url", default=None, help="Base URL for the LLM API")
 @click.option("--api-base", default=None, help="API base for the LLM API")
-@click.option("--temperature", type=float, default=None, help="LLM temperature override")
+@click.option(
+    "--temperature", type=float, default=None, help="LLM temperature override"
+)
 @click.option("--debug/--no-debug", default=None, help="Enable verbose debug logging")
-@click.option("--verbose", is_flag=True, default=False, help="Stream agent logs while running")
-@click.option("--dry-run", is_flag=True, default=False, help="List the selected tasks and exit")
+@click.option(
+    "--verbose", is_flag=True, default=False, help="Stream agent logs while running"
+)
+@click.option(
+    "--dry-run", is_flag=True, default=False, help="List the selected tasks and exit"
+)
 @coro
 async def runbench(
     benchmark_name: str,
@@ -738,7 +799,9 @@ async def runbench(
             dry_run=dry_run,
         )
     except KeyboardInterrupt:
-        console.print("\n[yellow]⏹️ Benchmark interrupted; partial results were kept.[/]")
+        console.print(
+            "\n[yellow]⏹️ Benchmark interrupted; partial results were kept.[/]"
+        )
         sys.exit(1)
 
     # Exit with appropriate code

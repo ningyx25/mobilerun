@@ -195,9 +195,13 @@ class AndroidWorldHttpDriver(DeviceDriver):
             f"{response.status_code}" + (f": {detail}" if detail else "")
         )
 
-    async def _get(self, path: str, *, params: dict | None = None, timeout: float | None = None) -> Any:
+    async def _get(
+        self, path: str, *, params: dict | None = None, timeout: float | None = None
+    ) -> Any:
         await self.ensure_connected()
-        response = await self._http.get(path, params=params, timeout=timeout or self.timeout)
+        response = await self._http.get(
+            path, params=params, timeout=timeout or self.timeout
+        )
         self._raise_for_status(response)
         return response.json()
 
@@ -216,7 +220,9 @@ class AndroidWorldHttpDriver(DeviceDriver):
         self._raise_for_status(response)
         return response.json()
 
-    async def _generic(self, args: list, *, server_timeout: float | None = None) -> dict:
+    async def _generic(
+        self, args: list, *, server_timeout: float | None = None
+    ) -> dict:
         """Issue an adb command through ``/adb/generic_request``."""
         params = {"timeout_sec": server_timeout} if server_timeout is not None else None
         result = await self._post(
@@ -243,13 +249,33 @@ class AndroidWorldHttpDriver(DeviceDriver):
         # The long_press tool routes through swipe(x, y, x, y, 1000), which
         # ``input swipe`` with identical endpoints interprets as a long press.
         await self._generic(
-            ["shell", "input", "swipe", int(x1), int(y1), int(x2), int(y2), int(duration_ms)],
+            [
+                "shell",
+                "input",
+                "swipe",
+                int(x1),
+                int(y1),
+                int(x2),
+                int(y2),
+                int(duration_ms),
+            ],
             server_timeout=max(10, duration_ms / 1000 + 5),
         )
 
-    async def drag(self, x1: int, y1: int, x2: int, y2: int, duration: float = 3.0) -> None:
+    async def drag(
+        self, x1: int, y1: int, x2: int, y2: int, duration: float = 3.0
+    ) -> None:
         await self._generic(
-            ["shell", "input", "draganddrop", int(x1), int(y1), int(x2), int(y2), int(duration * 1000)],
+            [
+                "shell",
+                "input",
+                "draganddrop",
+                int(x1),
+                int(y1),
+                int(x2),
+                int(y2),
+                int(duration * 1000),
+            ],
             server_timeout=max(10, duration + 5),
         )
 
@@ -293,7 +319,15 @@ class AndroidWorldHttpDriver(DeviceDriver):
             )
             return f"Started {package}"
         result = await self._generic(
-            ["shell", "monkey", "-p", package, "-c", "android.intent.category.LAUNCHER", "1"],
+            [
+                "shell",
+                "monkey",
+                "-p",
+                package,
+                "-c",
+                "android.intent.category.LAUNCHER",
+                "1",
+            ],
             server_timeout=30,
         )
         output = str(result.get("output") or "")
@@ -389,7 +423,13 @@ class AndroidWorldHttpDriver(DeviceDriver):
             "className": element.get("class_name") or "",
             "text": element.get("text") or "",
             "contentDescription": element.get("content_description") or "",
-            "resourceId": element.get("resource_id") or "",
+            # The server's default a11y path leaves resource_id unset and
+            # carries the view id in resource_name (e.g. "pkg:id/view"); the
+            # portal-style resourceId feeds keyboard filtering and the
+            # formatter's text fallback, so prefer whichever is populated.
+            "resourceId": element.get("resource_id")
+            or element.get("resource_name")
+            or "",
             "packageName": element.get("package_name") or "",
             "hintText": element.get("hint_text") or "",
             "isCheckable": bool(element.get("is_checkable")),
@@ -404,24 +444,28 @@ class AndroidWorldHttpDriver(DeviceDriver):
 
     async def _phone_state(self, elements: List[Dict[str, Any]]) -> Dict[str, Any]:
         """Build the phone_state section from the current activity + focus."""
-        package_name = ""
+        activity = ""
         try:
             activity = (await self._get("/adb/current_activity")).get("activity") or ""
-            package_name = activity.split("/", 1)[0] if activity else ""
         except Exception as exc:
             logger.debug("Could not fetch current activity: %s", exc)
 
+        package_name = activity.split("/", 1)[0] if activity else ""
         focused_text = ""
         is_editable = False
         for element in elements:
             if element.get("is_focused"):
-                focused_text = element.get("text") or element.get("content_description") or ""
+                focused_text = (
+                    element.get("text") or element.get("content_description") or ""
+                )
                 is_editable = bool(element.get("is_editable"))
                 if not package_name:
                     package_name = element.get("package_name") or ""
                 break
         return {
-            "currentApp": package_name,
+            # currentApp carries the full "pkg/Activity" (the agent records it
+            # as the current activity); packageName stays the package.
+            "currentApp": activity or package_name,
             "packageName": package_name,
             "focusedElement": {"text": focused_text} if focused_text else None,
             "isEditable": is_editable,

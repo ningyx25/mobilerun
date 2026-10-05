@@ -48,7 +48,7 @@ mobilerun run "<command>" [OPTIONS]
 | `--reasoning` | Enable planning mode | `false` |
 | `--vision` | Enable vision for all agents | From config |
 | `--vision-only` | Use screenshots only, without an accessibility tree | `false` |
-| `--control-backend visual-remote` | Use a compatible visual remote backend | Platform default |
+| `--control-backend` | `visual-remote` (compatible screenshot/action server) or `android-world` (AndroidWorld environment server; `--device` is its URL) | Platform default |
 | `--tcp` | Use TCP instead of content provider | `false` |
 | `--debug` | Verbose logging | `false` |
 | `--save-trajectory` | Save execution (`none`, `step`, `action`) | `none` |
@@ -241,7 +241,12 @@ device secrets and does not configure LLM provider authentication.
   <Tab title="Benchmark">
 
 Run the AndroidWorld benchmark suite (116 tasks) against an AndroidWorld
-environment server (see the Docker device setup) with the mobilerun agent.
+environment server with the mobilerun agent.
+
+Prerequisite: an AndroidWorld environment server is running, e.g. the docker
+container from the [android_world](https://github.com/google-research/android_world)
+repo (`docker build -t android_world:latest . && ./scripts/run_container.sh 5000`;
+a cold container needs 5-10 minutes to boot the emulator).
 
 ### Usage
 

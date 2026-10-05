@@ -38,6 +38,8 @@ from rich.console import Console
 from rich.table import Table
 
 from mobilerun.agent.droid.droid_agent import MobileAgent
+from mobilerun.agent.droid.events import ManagerPlanEvent
+from mobilerun.agent.external import list_agents
 from mobilerun.agent.utils.llm_loader import load_agent_llms
 from mobilerun.agent.utils.llm_picker import load_llm
 from mobilerun.config_manager import ConfigLoader
@@ -46,6 +48,7 @@ from mobilerun.tools.driver.android_world import (
     ANDROID_WORLD_CONNECTION,
     ANDROID_WORLD_DEFAULT_URL,
     AndroidWorldHttpDriver,
+    validate_android_world_url,
 )
 
 logger = logging.getLogger("mobilerun")
@@ -129,7 +132,11 @@ class AndroidWorldTaskClient:
                 if attempt < _RETRY_ATTEMPTS:
                     logger.debug(
                         "%s %s failed (%s); retry %d/%d in %.0fs",
-                        method, path, exc, attempt, _RETRY_ATTEMPTS - 1,
+                        method,
+                        path,
+                        exc,
+                        attempt,
+                        _RETRY_ATTEMPTS - 1,
                         _RETRY_BACKOFF_S,
                     )
                     await asyncio.sleep(_RETRY_BACKOFF_S)
@@ -141,8 +148,12 @@ class AndroidWorldTaskClient:
             if response.status_code in _RETRY_STATUSES and attempt < _RETRY_ATTEMPTS:
                 logger.debug(
                     "%s %s got %d; retry %d/%d in %.0fs",
-                    method, path, response.status_code, attempt,
-                    _RETRY_ATTEMPTS - 1, _RETRY_BACKOFF_S,
+                    method,
+                    path,
+                    response.status_code,
+                    attempt,
+                    _RETRY_ATTEMPTS - 1,
+                    _RETRY_BACKOFF_S,
                 )
                 await asyncio.sleep(_RETRY_BACKOFF_S)
                 continue
@@ -298,15 +309,21 @@ class TaskResult:
 # ---------------------------------------------------------------------------
 
 
-def _parse_task_index_range(value: str, total: int) -> tuple[int, int]:
-    """Parse a 1-based inclusive START-END range over the task list."""
+def _parse_task_index_range(value: str, total: Optional[int] = None) -> tuple[int, int]:
+    """Parse a 1-based inclusive START-END range over the task list.
+
+    With *total* set, the end bound is validated against the suite size;
+    format-only validation (*total* None) can run before the server is up.
+    """
     parts = value.strip().split("-")
     if len(parts) != 2 or not all(part.strip().isdigit() for part in parts):
         raise ValueError(f"Invalid --task-index-range '{value}'; expected START-END.")
     start, end = int(parts[0]), int(parts[1])
     if start < 1 or end < start:
-        raise ValueError(f"Invalid --task-index-range '{value}'; expected 1 <= START <= END.")
-    if end > total:
+        raise ValueError(
+            f"Invalid --task-index-range '{value}'; expected 1 <= START <= END."
+        )
+    if total is not None and end > total:
         raise ValueError(
             f"--task-index-range '{value}' exceeds the {total} tasks in the suite."
         )
@@ -334,7 +351,9 @@ def _select_tasks(
         if unknown:
             hints = []
             for name in unknown:
-                matches = difflib.get_close_matches(name, list(available), n=3, cutoff=0.5)
+                matches = difflib.get_close_matches(
+                    name, list(available), n=3, cutoff=0.5
+                )
                 if matches:
                     hints.append(f"'{name}' (did you mean: {', '.join(matches)}?)")
                 else:
@@ -383,6 +402,26 @@ def _load_results(path: Path) -> Dict[str, TaskResult]:
         result = TaskResult(**{k: v for k, v in entry.items() if k in names})
         results[result.key] = result
     return results
+
+
+def _load_run_meta(path: Path) -> Dict[str, Any]:
+    """Run-level metadata from an existing results file (for resume checks)."""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return {k: v for k, v in data.items() if k != "tasks"}
+
+
+# Provenance fields that, when changed, make resumed records incomparable.
+_RESUME_PROVENANCE_FIELDS = (
+    "server_url",
+    "seed",
+    "n_task_combinations",
+    "provider",
+    "model",
+    "task_idx",
+)
 
 
 # ---------------------------------------------------------------------------
@@ -477,7 +516,7 @@ async def run_androidworld_benchmark(
     n_task_combinations: Optional[int] = None,
     output: Optional[str] = None,
     resume: bool = False,
-    health_timeout: float = 300.0,
+    health_timeout: float = 900.0,
     task_timeout: float = 1000.0,
     save_trajectory: Optional[str] = None,
     telemetry: Optional[bool] = False,
@@ -496,15 +535,39 @@ async def run_androidworld_benchmark(
     False on fatal errors (unhealthy server, bad selection, interrupt).
     """
     server_url = (server_url or ANDROID_WORLD_DEFAULT_URL).rstrip("/")
+    try:
+        # Validate before the (potentially minutes-long) health wait so a bad
+        # URL fails immediately with a clear message instead of a timeout.
+        server_url = validate_android_world_url(server_url)
+    except ValueError as exc:
+        console.print(f"[red]Error: {exc}[/]")
+        return False
 
     if (provider is None) != (model is None):
-        console.print("[red]Error: --provider and --model must be provided together.[/]")
+        console.print(
+            "[red]Error: --provider and --model must be provided together.[/]"
+        )
         return False
+
+    if task_index_range:
+        try:
+            _parse_task_index_range(task_index_range)  # format check, pre-wait
+        except ValueError as exc:
+            console.print(f"[red]Error: {exc}[/]")
+            return False
 
     config = ConfigLoader.load(config_path)
     # This benchmark always drives an AndroidWorld environment server.
     config.device.control_backend = ANDROID_WORLD_CONNECTION
     config.device.serial = server_url
+    if config.agent.name in list_agents():
+        # External agents take MobileAgent's early-exit path, which drives adb
+        # directly and would bypass the injected AndroidWorld driver.
+        console.print(
+            f"[red]Error: agent '{config.agent.name}' is an external agent; "
+            "runbench requires a built-in mobilerun agent.[/]"
+        )
+        return False
     if save_trajectory is not None:
         config.logging.save_trajectory = save_trajectory
     if telemetry is not None:
@@ -514,7 +577,9 @@ async def run_androidworld_benchmark(
     _setup_benchmark_logging(debug_mode, verbose)
 
     if output is None:
-        output = f"runs/{_BENCHMARK_NAME}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+        output = (
+            f"runs/{_BENCHMARK_NAME}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+        )
     output_path = Path(output)
 
     client = AndroidWorldTaskClient(server_url)
@@ -537,7 +602,9 @@ async def run_androidworld_benchmark(
     }
 
     try:
-        console.print(f"⏳ Waiting for AndroidWorld server at [cyan]{server_url}[/] ...")
+        console.print(
+            f"⏳ Waiting for AndroidWorld server at [cyan]{server_url}[/] ..."
+        )
         if not await client.wait_healthy(health_timeout):
             console.print(
                 f"[red]Server at {server_url} did not become healthy within "
@@ -631,6 +698,25 @@ async def run_androidworld_benchmark(
         results: Dict[str, TaskResult] = {}
         if resume and output_path.exists():
             results = _load_results(output_path)
+            previous_meta = _load_run_meta(output_path)
+            changed = []
+            for field in _RESUME_PROVENANCE_FIELDS:
+                if previous_meta.get(field) == run_meta.get(field):
+                    continue
+                if (
+                    field in ("seed", "n_task_combinations")
+                    and run_meta.get(field) is None
+                ):
+                    # No reinit requested: the container's suite is unchanged,
+                    # so the recorded rows stay comparable.
+                    continue
+                changed.append(field)
+            if changed:
+                console.print(
+                    "[yellow]⚠️ Resuming with different "
+                    f"{', '.join(changed)} than the recorded run; previously "
+                    "recorded tasks may not be comparable.[/]"
+                )
             console.print(
                 f"⏩ Resuming: {len(results)} recorded task(s) in {output_path}"
             )
@@ -641,7 +727,9 @@ async def run_androidworld_benchmark(
             key = f"{task_type}#{task_idx}"
             recorded = results.get(key)
             if resume and recorded is not None and recorded.error is None:
-                console.print(f"[dim][{index}/{total}] {task_type} — already recorded, skipped[/]")
+                console.print(
+                    f"[dim][{index}/{total}] {task_type} — already recorded, skipped[/]"
+                )
                 continue
 
             result = TaskResult(
@@ -663,7 +751,7 @@ async def run_androidworld_benchmark(
                 # agent.reset(start_on_home_screen).
                 await client.reset(go_home=start_on_home)
 
-                max_steps = steps or int(10 * complexity)
+                max_steps = steps if steps is not None else int(10 * complexity)
                 task_config = copy.deepcopy(config)
                 task_config.agent.max_steps = max_steps
 
@@ -676,31 +764,60 @@ async def run_androidworld_benchmark(
                     runtype="benchmark",
                 )
                 handler = agent.run()
-                async for _event in handler.stream_events():
-                    pass  # Drain events to bound memory; progress is per-task.
+                manager_answered = False
+                async for event in handler.stream_events():
+                    # Reasoning mode: the manager's final answer is the
+                    # episode-completion signal (AndroidWorld's `done`).
+                    if (
+                        isinstance(event, ManagerPlanEvent)
+                        and (event.answer or "").strip()
+                    ):
+                        manager_answered = True
                 run_result = await handler
 
                 result.success = bool(run_result.success)
                 result.steps = run_result.steps
                 result.reason = run_result.reason
-                result.finished = bool(agent.shared_state.finished)
+                # AndroidWorld gates the score on the agent declaring the
+                # episode finished. Direct mode: complete() ran, which sets
+                # shared_state.success and survives the run (FastAgent only
+                # clears the transient `finished` flag). Reasoning mode: the
+                # manager finalized with an answer.
+                if task_config.agent.reasoning:
+                    declared_done = manager_answered
+                else:
+                    declared_done = agent.shared_state.success is not None
+                result.finished = declared_done
 
                 # Score before tear_down: the server evaluates live device
                 # state and requires the task to still be initialized.
                 result.score = await client.get_score(task_type, task_idx)
-                result.gated_score = result.score if result.finished else 0.0
+                result.gated_score = result.score if declared_done else 0.0
             except Exception as exc:  # noqa: BLE001 - record and continue
                 result.error = f"{type(exc).__name__}: {exc}"
-                if isinstance(exc, ConnectionError):
+                # Infra failures (server or device unreachable) make every
+                # remaining episode fail the same way: probe the deep /health
+                # endpoint (env + QEMU + adb) and wait for recovery. Plain
+                # ConnectionError from the task client and httpx transport
+                # errors from the driver both land here, as do wrapped
+                # state-fetch failures that a health probe can still detect.
+                if (
+                    isinstance(exc, (ConnectionError, httpx.TransportError))
+                    or not await client.health()
+                ):
                     console.print(
                         "[yellow]Connection failure; waiting for the server to recover ...[/]"
                     )
                     if not await client.wait_healthy(health_timeout):
                         result.duration_s = time.monotonic() - task_started
                         results[key] = result
-                        run_meta["finished_at"] = datetime.now().isoformat(timespec="seconds")
+                        run_meta["finished_at"] = datetime.now().isoformat(
+                            timespec="seconds"
+                        )
                         _write_results(output_path, run_meta, results)
-                        console.print("[red]Server did not recover; aborting the run.[/]")
+                        console.print(
+                            "[red]Server did not recover; aborting the run.[/]"
+                        )
                         fatal_error = True
                         break
             finally:
