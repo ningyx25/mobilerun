@@ -30,15 +30,31 @@ def run(coro):
 def _client_handlers() -> dict:
     return {
         ("GET", "/health"): lambda r: httpx.Response(200, json={"status": "success"}),
-        ("GET", "/suite/task_list"): lambda r: httpx.Response(200, json={"task_list": ["A", "B"]}),
-        ("GET", "/suite/task_length"): lambda r: httpx.Response(200, json={"length": 2}),
-        ("POST", "/suite/reinitialize"): lambda r: httpx.Response(200, json={"status": "success"}),
-        ("POST", "/task/initialize"): lambda r: httpx.Response(200, json={"status": "success"}),
-        ("GET", "/task/goal"): lambda r: httpx.Response(200, json={"goal": "do the thing"}),
-        ("POST", "/task/complexity"): lambda r: httpx.Response(200, json={"complexity": 1.5}),
-        ("POST", "/task/start_on_home_screen"): lambda r: httpx.Response(200, json={"start_on_home_screen": False}),
+        ("GET", "/suite/task_list"): lambda r: httpx.Response(
+            200, json={"task_list": ["A", "B"]}
+        ),
+        ("GET", "/suite/task_length"): lambda r: httpx.Response(
+            200, json={"length": 2}
+        ),
+        ("POST", "/suite/reinitialize"): lambda r: httpx.Response(
+            200, json={"status": "success"}
+        ),
+        ("POST", "/task/initialize"): lambda r: httpx.Response(
+            200, json={"status": "success"}
+        ),
+        ("GET", "/task/goal"): lambda r: httpx.Response(
+            200, json={"goal": "do the thing"}
+        ),
+        ("POST", "/task/complexity"): lambda r: httpx.Response(
+            200, json={"complexity": 1.5}
+        ),
+        ("POST", "/task/start_on_home_screen"): lambda r: httpx.Response(
+            200, json={"start_on_home_screen": False}
+        ),
         ("GET", "/task/score"): lambda r: httpx.Response(200, json={"score": 0.75}),
-        ("POST", "/task/tear_down"): lambda r: httpx.Response(200, json={"status": "success"}),
+        ("POST", "/task/tear_down"): lambda r: httpx.Response(
+            200, json={"status": "success"}
+        ),
         ("POST", "/reset"): lambda r: httpx.Response(200, json={"status": "success"}),
     }
 
@@ -48,9 +64,13 @@ def make_client(handlers=None):
 
     def handler(request: httpx.Request) -> httpx.Response:
         recorded.append(request)
-        responder = (handlers or _client_handlers()).get((request.method, request.url.path))
+        responder = (handlers or _client_handlers()).get(
+            (request.method, request.url.path)
+        )
         if responder is None:
-            return httpx.Response(404, json={"detail": f"no handler for {request.url.path}"})
+            return httpx.Response(
+                404, json={"detail": f"no handler for {request.url.path}"}
+            )
         return responder(request)
 
     client = bench.AndroidWorldTaskClient(
@@ -177,9 +197,9 @@ def test_select_tasks_range_is_one_based_inclusive():
 
 def test_select_tasks_range_intersects_with_tasks():
     available = ["A", "B", "C", "D", "E"]
-    assert bench._select_tasks(
-        available, tasks="A,B,C", task_index_range="3-5"
-    ) == ["C"]
+    assert bench._select_tasks(available, tasks="A,B,C", task_index_range="3-5") == [
+        "C"
+    ]
 
 
 def test_select_tasks_difficulty_filter():
@@ -189,14 +209,19 @@ def test_select_tasks_difficulty_filter():
         "B": {"difficulty": "hard"},
         "C": {"difficulty": "easy"},
     }
-    assert bench._select_tasks(available, difficulty=["easy"], metadata=metadata) == ["A", "C"]
+    assert bench._select_tasks(available, difficulty=["easy"], metadata=metadata) == [
+        "A",
+        "C",
+    ]
 
 
 def test_bundled_metadata_matches_androidworld_task_list():
     metadata = bench.load_task_metadata()
     assert len(metadata) == 116
     assert sum(1 for entry in metadata.values() if entry["difficulty"] == "easy") == 61
-    assert sum(1 for entry in metadata.values() if entry["difficulty"] == "medium") == 36
+    assert (
+        sum(1 for entry in metadata.values() if entry["difficulty"] == "medium") == 36
+    )
     assert sum(1 for entry in metadata.values() if entry["difficulty"] == "hard") == 19
 
 
@@ -208,7 +233,9 @@ def test_bundled_metadata_matches_androidworld_task_list():
 def test_results_round_trip(tmp_path):
     path = tmp_path / "results.json"
     results = {
-        "A#0": bench.TaskResult(task_type="A", score=1.0, gated_score=1.0, finished=True),
+        "A#0": bench.TaskResult(
+            task_type="A", score=1.0, gated_score=1.0, finished=True
+        ),
         "B#0": bench.TaskResult(task_type="B", error="boom"),
     }
 
@@ -296,12 +323,13 @@ class FakeDriver:
 
 
 class FakeHandler:
-    def __init__(self, result):
+    def __init__(self, result, events=()):
         self._result = result
+        self._events = list(events)
 
     async def stream_events(self):
-        return
-        yield  # pragma: no cover - makes this an async generator
+        for event in self._events:
+            yield event
 
     def __await__(self):
         async def _finish():
@@ -310,25 +338,39 @@ class FakeHandler:
         return _finish().__await__()
 
 
-def make_fake_agent_class(*, finished=True, success=True, steps=5, reason="done"):
+def make_fake_agent_class(
+    *, shared_success=True, success=True, steps=5, reason="done", events=()
+):
+    """Fake MobileAgent.
+
+    ``shared_success`` models ``shared_state.success`` — the direct-mode
+    completion signal (None means complete() never ran); ``events`` are
+    yielded from the stream (reasoning mode's manager-answer signal).
+    """
+
     class FakeAgent:
         instances = []
 
-        def __init__(self, goal=None, config=None, llms=None, driver=None, timeout=None, **kwargs):
+        def __init__(
+            self, goal=None, config=None, llms=None, driver=None, timeout=None, **kwargs
+        ):
             self.goal = goal
             self.config = config
             self.driver = driver
             self.timeout = timeout
-            self.shared_state = SimpleNamespace(finished=finished)
+            self.shared_state = SimpleNamespace(success=shared_success)
             FakeAgent.instances.append(self)
 
         def run(self):
-            return FakeHandler(SimpleNamespace(success=success, steps=steps, reason=reason))
+            return FakeHandler(
+                SimpleNamespace(success=success, steps=steps, reason=reason),
+                events=events,
+            )
 
     return FakeAgent
 
 
-def patch_benchmark(monkeypatch, client, agent_class, *, llms=None):
+def patch_benchmark(monkeypatch, client, agent_class, *, llms=None, reasoning=False):
     monkeypatch.setattr(bench, "AndroidWorldTaskClient", lambda *a, **k: client)
     monkeypatch.setattr(bench, "AndroidWorldHttpDriver", FakeDriver)
     monkeypatch.setattr(bench, "MobileAgent", agent_class)
@@ -336,7 +378,10 @@ def patch_benchmark(monkeypatch, client, agent_class, *, llms=None):
         bench.ConfigLoader,
         "load",
         lambda _path=None: MobileConfig.from_dict(
-            {"agent": {"name": "external-agent"}, "telemetry": {"enabled": False}}
+            {
+                "agent": {"name": "external-agent", "reasoning": reasoning},
+                "telemetry": {"enabled": False},
+            }
         ),
     )
     monkeypatch.setattr(bench, "load_agent_llms", lambda config, **kwargs: llms or {})
@@ -345,7 +390,7 @@ def patch_benchmark(monkeypatch, client, agent_class, *, llms=None):
 
 def test_episode_order_and_gated_score(monkeypatch, tmp_path):
     client = FakeTaskClient(tasks=("ClockStopWatchRunning",), score=1.0)
-    agent_class = make_fake_agent_class(finished=True)
+    agent_class = make_fake_agent_class(shared_success=True)
     patch_benchmark(monkeypatch, client, agent_class)
     output = tmp_path / "results.json"
 
@@ -391,8 +436,11 @@ def test_episode_order_and_gated_score(monkeypatch, tmp_path):
 
 
 def test_gated_score_is_zero_when_agent_did_not_finish(monkeypatch, tmp_path):
+    """Direct mode: complete() never ran (shared_state.success stays None)."""
     client = FakeTaskClient(tasks=("ClockStopWatchRunning",), score=1.0)
-    agent_class = make_fake_agent_class(finished=False, success=False, reason="Reached maximum steps (10)")
+    agent_class = make_fake_agent_class(
+        shared_success=None, success=False, reason="Reached maximum steps (10)"
+    )
     patch_benchmark(monkeypatch, client, agent_class)
     output = tmp_path / "results.json"
 
@@ -406,6 +454,157 @@ def test_gated_score_is_zero_when_agent_did_not_finish(monkeypatch, tmp_path):
     assert entry["score"] == 1.0
     assert entry["gated_score"] == 0.0
     assert entry["finished"] is False
+
+
+def test_reasoning_mode_gating_uses_manager_answer(monkeypatch, tmp_path):
+    """Reasoning mode: the manager finalizing with an answer marks the
+    episode done; shared_state.success (set by the executor's complete) is
+    not the completion signal there."""
+    from mobilerun.agent.droid.events import ManagerPlanEvent
+
+    plan_event = ManagerPlanEvent(
+        plan="", current_subgoal="", thought="", answer="Task done", success=True
+    )
+    client = FakeTaskClient(tasks=("ClockStopWatchRunning",), score=1.0)
+    agent_class = make_fake_agent_class(shared_success=None, events=(plan_event,))
+    patch_benchmark(monkeypatch, client, agent_class, reasoning=True)
+
+    run(
+        bench.run_androidworld_benchmark(
+            server_url="http://localhost:5000", output=str(tmp_path / "r.json")
+        )
+    )
+
+    entry = json.loads((tmp_path / "r.json").read_text())["tasks"][0]
+    assert entry["finished"] is True
+    assert entry["gated_score"] == 1.0
+
+
+def test_reasoning_mode_without_manager_answer_is_not_done(monkeypatch, tmp_path):
+    from mobilerun.agent.droid.events import ManagerPlanEvent
+
+    # An intermediate plan (empty answer) is not a completion signal.
+    plan_event = ManagerPlanEvent(
+        plan="open settings", current_subgoal="tap", thought="", answer="", success=None
+    )
+    client = FakeTaskClient(tasks=("ClockStopWatchRunning",), score=1.0)
+    agent_class = make_fake_agent_class(shared_success=None, events=(plan_event,))
+    patch_benchmark(monkeypatch, client, agent_class, reasoning=True)
+
+    run(
+        bench.run_androidworld_benchmark(
+            server_url="http://localhost:5000", output=str(tmp_path / "r.json")
+        )
+    )
+
+    entry = json.loads((tmp_path / "r.json").read_text())["tasks"][0]
+    assert entry["finished"] is False
+    assert entry["gated_score"] == 0.0
+
+
+def test_steps_zero_is_honored(monkeypatch, tmp_path):
+    client = FakeTaskClient(tasks=("ClockStopWatchRunning",))
+    agent_class = make_fake_agent_class()
+    patch_benchmark(monkeypatch, client, agent_class)
+
+    run(
+        bench.run_androidworld_benchmark(
+            server_url="http://localhost:5000",
+            output=str(tmp_path / "r.json"),
+            steps=0,
+        )
+    )
+
+    assert agent_class.instances[0].config.agent.max_steps == 0
+
+
+def test_invalid_server_url_fails_before_health_wait(monkeypatch, tmp_path):
+    client = FakeTaskClient(tasks=("ClockStopWatchRunning",))
+    patch_benchmark(monkeypatch, client, make_fake_agent_class())
+
+    success = run(
+        bench.run_androidworld_benchmark(
+            server_url="localhost:5000", output=str(tmp_path / "r.json")
+        )
+    )
+
+    assert success is False
+    assert client.calls == []
+
+
+def test_external_agent_config_is_rejected(monkeypatch, tmp_path):
+    """External agents bypass the injected driver and drive adb directly, so
+    runbench must refuse them up front instead of failing every task."""
+    client = FakeTaskClient(tasks=("ClockStopWatchRunning",))
+    patch_benchmark(monkeypatch, client, make_fake_agent_class())
+    # patch_benchmark builds the config with agent name "external-agent".
+    monkeypatch.setattr(bench, "list_agents", lambda: ["external-agent"])
+
+    success = run(
+        bench.run_androidworld_benchmark(
+            server_url="http://localhost:5000", output=str(tmp_path / "r.json")
+        )
+    )
+
+    assert success is False
+    assert client.calls == []
+
+
+def test_invalid_task_index_range_fails_before_health_wait(monkeypatch, tmp_path):
+    client = FakeTaskClient(tasks=("ClockStopWatchRunning",))
+    patch_benchmark(monkeypatch, client, make_fake_agent_class())
+
+    success = run(
+        bench.run_androidworld_benchmark(
+            server_url="http://localhost:5000",
+            output=str(tmp_path / "r.json"),
+            task_index_range="59-",
+        )
+    )
+
+    assert success is False
+    assert client.calls == []
+
+
+def test_wrapped_agent_failure_probes_health_and_aborts_when_unhealthy(
+    monkeypatch, tmp_path
+):
+    """A non-ConnectionError task failure (e.g. the state provider's wrapped
+    'Failed to get state' exception) still triggers the health probe; an
+    unhealthy server aborts the run."""
+
+    class UnhealthyAfterStart(FakeTaskClient):
+        def __init__(self):
+            super().__init__(tasks=("ClockStopWatchRunning", "SystemBluetoothTurnOn"))
+            self.health_calls = 0
+
+        async def health(self):
+            self.health_calls += 1
+            return False
+
+        async def wait_healthy(self, timeout, poll_interval=5.0):
+            self.health_calls += 1
+            return self.health_calls == 1  # startup wait passes, recovery fails
+
+    class ExplodingAgent:
+        def __init__(self, **kwargs):
+            self.shared_state = SimpleNamespace(success=None)
+
+        def run(self):
+            raise RuntimeError("Failed to get state after 7 attempts")
+
+    client = UnhealthyAfterStart()
+    patch_benchmark(monkeypatch, client, ExplodingAgent)
+    output = tmp_path / "r.json"
+
+    success = run(
+        bench.run_androidworld_benchmark(
+            server_url="http://localhost:5000", output=str(output), health_timeout=0
+        )
+    )
+
+    assert success is False
+    assert len(json.loads(output.read_text())["tasks"]) == 1
 
 
 def test_steps_override_replaces_complexity_budget(monkeypatch, tmp_path):
@@ -611,11 +810,16 @@ def test_runbench_cli_passes_options(monkeypatch):
         cli_main.cli,
         [
             "runbench",
-            "--benchmark-name", "androidworld",
-            "-d", "http://localhost:5001",
-            "--tasks", "A,B",
-            "--steps", "7",
-            "--difficulty", "easy",
+            "--benchmark-name",
+            "androidworld",
+            "-d",
+            "http://localhost:5001",
+            "--tasks",
+            "A,B",
+            "--steps",
+            "7",
+            "--difficulty",
+            "easy",
             "--resume",
             "--dry-run",
         ],
@@ -633,7 +837,9 @@ def test_runbench_cli_passes_options(monkeypatch):
 def test_runbench_cli_mobileworld_not_implemented():
     from click.testing import CliRunner
 
-    result = CliRunner().invoke(cli_main.cli, ["runbench", "--benchmark-name", "mobileworld"])
+    result = CliRunner().invoke(
+        cli_main.cli, ["runbench", "--benchmark-name", "mobileworld"]
+    )
 
     assert result.exit_code == 1
     assert "not implemented" in result.output

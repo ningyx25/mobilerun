@@ -90,7 +90,8 @@ def make_driver(handlers: dict, url: str = "http://localhost:5000"):
         responder = handlers.get((request.method, request.url.path))
         if responder is None:
             return httpx.Response(
-                404, json={"detail": f"no handler for {request.method} {request.url.path}"}
+                404,
+                json={"detail": f"no handler for {request.method} {request.url.path}"},
             )
         return responder(request)
 
@@ -166,12 +167,26 @@ def test_swipe_and_drag_use_generic_request():
 
     run(driver.swipe(10, 20, 30, 40, duration_ms=500))
     assert json.loads(recorded[-1].content) == [
-        "shell", "input", "swipe", "10", "20", "30", "40", "500",
+        "shell",
+        "input",
+        "swipe",
+        "10",
+        "20",
+        "30",
+        "40",
+        "500",
     ]
 
     run(driver.drag(1, 2, 3, 4, duration=1.5))
     assert json.loads(recorded[-1].content) == [
-        "shell", "input", "draganddrop", "1", "2", "3", "4", "1500",
+        "shell",
+        "input",
+        "draganddrop",
+        "1",
+        "2",
+        "3",
+        "4",
+        "1500",
     ]
 
 
@@ -224,8 +239,13 @@ def test_start_app_uses_monkey_and_reports_failure_output():
 
     assert run(driver.start_app("com.example.app")) == "Started com.example.app"
     assert json.loads(recorded[-1].content) == [
-        "shell", "monkey", "-p", "com.example.app",
-        "-c", "android.intent.category.LAUNCHER", "1",
+        "shell",
+        "monkey",
+        "-p",
+        "com.example.app",
+        "-c",
+        "android.intent.category.LAUNCHER",
+        "1",
     ]
 
     handlers[("POST", "/adb/generic_request")] = lambda r: _ok(
@@ -250,9 +270,7 @@ def test_get_apps_include_system_switches_endpoint():
         {"package": "com.systemui", "label": "com.systemui"},
     ]
     pm_request = next(
-        request
-        for request in recorded
-        if request.url.path == "/adb/generic_request"
+        request for request in recorded if request.url.path == "/adb/generic_request"
     )
     assert json.loads(pm_request.content) == ["shell", "pm", "list", "packages", "-3"]
 
@@ -306,11 +324,18 @@ def test_get_ui_tree_converts_to_portal_shape_and_feeds_android_provider():
 
     assert tree["device_context"]["screen_bounds"] == {"width": 1080, "height": 2400}
     assert tree["phone_state"]["packageName"] == "com.example.app"
-    assert tree["phone_state"]["currentApp"] == "com.example.app"
+    # currentApp keeps the full activity (agents record it as the current
+    # activity); packageName stays the package.
+    assert tree["phone_state"]["currentApp"] == "com.example.app/.MainActivity"
     assert tree["phone_state"]["focusedElement"] == {"text": "Search"}
     assert tree["phone_state"]["isEditable"] is True
     first = tree["a11y_tree"]["children"][0]
-    assert first["boundsInScreen"] == {"left": 491, "top": 808, "right": 588, "bottom": 879}
+    assert first["boundsInScreen"] == {
+        "left": 491,
+        "top": 808,
+        "right": 588,
+        "bottom": 879,
+    }
     assert first["text"] == "VLC"
 
     # The converted state must be consumable by the standard Android pipeline.
@@ -331,10 +356,39 @@ def test_get_ui_tree_converts_to_portal_shape_and_feeds_android_provider():
     assert state.get_element_coords(1)
 
 
+def test_get_ui_tree_maps_resource_name_when_resource_id_missing():
+    """The server's default a11y path leaves resource_id unset and carries
+    the view id in resource_name; resourceId must fall back to it so keyboard
+    filtering and the formatter's text fallback keep working."""
+    elements = [
+        _ui_element(
+            text="q",
+            class_name="android.widget.Button",
+            resource_id=None,
+            resource_name="com.google.android.inputmethod.latin:id/key_pos_q",
+        )
+    ]
+    driver, _ = make_driver(_base_handlers(elements=elements))
+
+    tree = run(driver.get_ui_tree())
+
+    node = tree["a11y_tree"]["children"][0]
+    assert node["resourceId"] == "com.google.android.inputmethod.latin:id/key_pos_q"
+
+    # The keyboard filter now recognizes the Gboard element and drops it.
+    from mobilerun.tools.filters import DetailedFilter
+
+    filtered = DetailedFilter().filter(tree["a11y_tree"], tree["device_context"])
+    assert filtered is not None
+    assert filtered["children"] == []
+
+
 def test_get_ui_tree_falls_back_to_logical_screen_size():
     handlers = _base_handlers()
     handlers[("POST", "/state")] = lambda r: _ok(image_b64="", ui_elements=[])
-    handlers[("GET", "/adb/logical_screen_size")] = lambda r: _ok(width=720, height=1280)
+    handlers[("GET", "/adb/logical_screen_size")] = lambda r: _ok(
+        width=720, height=1280
+    )
     driver, _ = make_driver(handlers)
 
     tree = run(driver.get_ui_tree())

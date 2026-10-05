@@ -660,6 +660,14 @@ class MobileAgent(Workflow):
                 f"{', '.join(sorted(supported_backends))}. Omit control backend "
                 "for the platform default."
             )
+        if is_ios and control_backend == ANDROID_WORLD_CONNECTION:
+            # The android-world driver serves the Android-shaped state; the
+            # iOS state provider would not understand it, so fail loudly
+            # instead of pairing the two halves of the pipeline wrongly.
+            raise ValueError(
+                "The 'android-world' control backend drives an Android "
+                "emulator server and cannot be combined with platform 'ios'."
+            )
         is_visual_remote = control_backend == VISUAL_REMOTE_CONNECTION
         # An http(s) URL in the serial is never a valid ADB serial; treat it
         # as an AndroidWorld server URL (an explicit control_backend wins).
@@ -729,7 +737,12 @@ class MobileAgent(Workflow):
 
         # Wrap with StealthDriver if stealth mode enabled
         stealth_enabled = self.config.tools and self.config.tools.stealth
-        if stealth_enabled and not is_ios and not is_visual_remote and not is_android_world:
+        if (
+            stealth_enabled
+            and not is_ios
+            and not is_visual_remote
+            and not is_android_world
+        ):
             driver = StealthDriver(driver)
 
         # Wrap with RecordingDriver if trajectory saving enabled
