@@ -238,6 +238,51 @@ device secrets and does not configure LLM provider authentication.
 
   </Tab>
 
+  <Tab title="Benchmark">
+
+Run the AndroidWorld benchmark suite (116 tasks) against an AndroidWorld
+environment server (see the Docker device setup) with the mobilerun agent.
+
+### Usage
+
+```bash
+mobilerun runbench --benchmark-name androidworld [OPTIONS]
+```
+
+### Common Flags
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--benchmark-name` | Benchmark to run (`androidworld`) | Required |
+| `--device`, `-d` | AndroidWorld server URL | `http://localhost:5000` |
+| `--tasks` | Comma-separated task names to run | All 116 tasks |
+| `--task-index-range` | 1-based `START-END` range over the task list (e.g. `59-116`) | All |
+| `--difficulty` | Only run `easy`, `medium` and/or `hard` tasks | All |
+| `--steps` | Max steps per task | `10 x task complexity` |
+| `--output`, `-o` | Results JSON path | `runs/androidworld_<timestamp>.json` |
+| `--resume` | Skip tasks already recorded in the output file | `false` |
+| `--dry-run` | List the selected tasks and exit | `false` |
+| `--provider` / `--model` | LLM provider/model override | From config |
+| `--verbose` | Stream agent logs while running | `false` |
+
+### Examples
+
+```bash
+# Run a couple of tasks as a smoke test
+mobilerun runbench --benchmark-name androidworld -d http://localhost:5000 \
+    --tasks ClockStopWatchRunning,SystemBluetoothTurnOn
+
+# Run the first half of the suite, resuming from an earlier run
+mobilerun runbench --benchmark-name androidworld -d http://localhost:5000 \
+    --task-index-range 1-58 -o runs/aw_half1.json --resume
+```
+
+Results are recorded per task (server score plus an AndroidWorld-style gated
+score that is 0 unless the agent declared the episode finished), written
+incrementally to the output JSON, and summarized by difficulty at the end.
+
+  </Tab>
+
   <Tab title="Device Management">
 
 ### `mobilerun devices`
