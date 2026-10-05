@@ -43,6 +43,7 @@ from mobilerun.agent.utils.oauth.openai_oauth_llm import (
     DEFAULT_OPENAI_OAUTH_CALLBACK_PORT,
     DEFAULT_OPENAI_OAUTH_CREDENTIAL_PATH,
 )
+from mobilerun.benchmark.android_world import run_androidworld_benchmark
 from mobilerun.cli.configure_wizard import (
     ConfigureWizardCallbacks,
     run_configure_wizard,
@@ -598,6 +599,123 @@ async def run(
         save_trajectory=save_trajectory,
         ios=ios,
     )
+
+    # Exit with appropriate code
+    sys.exit(0 if success else 1)
+
+
+@cli.command()
+@click.option(
+    "--benchmark-name",
+    type=click.Choice(["androidworld", "mobileworld"]),
+    help="Benchmark to run",
+    required=True,
+)
+@click.option(
+    "--device",
+    "-d",
+    default=None,
+    help="AndroidWorld environment server URL (default http://localhost:5000)",
+)
+@click.option("--config", "-c", "config_path", help="Path to config file", default=None)
+@click.option("--tasks", default=None, help="Comma-separated task names to run (default: all)")
+@click.option(
+    "--task-index-range",
+    default=None,
+    help="1-based START-END range over the full task list (e.g. 59-116)",
+)
+@click.option(
+    "--difficulty",
+    type=click.Choice(["easy", "medium", "hard"]),
+    multiple=True,
+    help="Only run tasks of these difficulties",
+)
+@click.option("--task-idx", type=int, default=0, show_default=True, help="Suite instance index to run per task")
+@click.option("--steps", type=int, default=None, help="Max steps per task (default: 10 x task complexity)")
+@click.option("--seed", type=int, default=None, help="Reinitialize the server suite with this seed")
+@click.option("--n-task-combinations", type=int, default=None, help="Instances per task when reinitializing the suite")
+@click.option("--output", "-o", default=None, help="Results JSON path (default runs/androidworld_<timestamp>.json)")
+@click.option("--resume", is_flag=True, default=False, help="Skip tasks already recorded in the output file")
+@click.option("--health-timeout", type=float, default=300.0, show_default=True, help="Seconds to wait for the server to become healthy")
+@click.option("--task-timeout", type=float, default=1000.0, show_default=True, help="Workflow timeout per task (seconds)")
+@click.option(
+    "--save-trajectory",
+    type=click.Choice(["none", "step", "action"]),
+    default=None,
+    help="Trajectory saving level",
+)
+@click.option("--telemetry/--no-telemetry", default=False, help="Send telemetry events during the benchmark")
+@click.option("--provider", default=None, help="LLM provider (defaults to the config profile)")
+@click.option("--model", default=None, help="LLM model")
+@click.option("--base-url", default=None, help="Base URL for the LLM API")
+@click.option("--api-base", default=None, help="API base for the LLM API")
+@click.option("--temperature", type=float, default=None, help="LLM temperature override")
+@click.option("--debug/--no-debug", default=None, help="Enable verbose debug logging")
+@click.option("--verbose", is_flag=True, default=False, help="Stream agent logs while running")
+@click.option("--dry-run", is_flag=True, default=False, help="List the selected tasks and exit")
+@coro
+async def runbench(
+    benchmark_name: str,
+    device: str | None,
+    config_path: str | None,
+    tasks: str | None,
+    task_index_range: str | None,
+    difficulty: tuple[str, ...],
+    task_idx: int,
+    steps: int | None,
+    seed: int | None,
+    n_task_combinations: int | None,
+    output: str | None,
+    resume: bool,
+    health_timeout: float,
+    task_timeout: float,
+    save_trajectory: str | None,
+    telemetry: bool,
+    provider: str | None,
+    model: str | None,
+    base_url: str | None,
+    api_base: str | None,
+    temperature: float | None,
+    debug: bool | None,
+    verbose: bool,
+    dry_run: bool,
+):
+    """Run a benchmark suite (AndroidWorld) with the mobilerun agent."""
+    if benchmark_name.lower() != "androidworld":
+        console.print(
+            "[red]Error: the 'mobileworld' benchmark is not implemented yet.[/]"
+        )
+        sys.exit(1)
+
+    try:
+        success = await run_androidworld_benchmark(
+            server_url=device,
+            config_path=config_path,
+            tasks=tasks,
+            task_index_range=task_index_range,
+            difficulty=difficulty,
+            task_idx=task_idx,
+            steps=steps,
+            seed=seed,
+            n_task_combinations=n_task_combinations,
+            output=output,
+            resume=resume,
+            health_timeout=health_timeout,
+            task_timeout=task_timeout,
+            save_trajectory=save_trajectory,
+            telemetry=telemetry,
+            provider=provider,
+            model=model,
+            base_url=base_url,
+            api_base=api_base,
+            temperature=temperature,
+            debug=debug,
+            verbose=verbose,
+            dry_run=dry_run,
+        )
+    except KeyboardInterrupt:
+        console.print("\n[yellow]⏹️ Benchmark interrupted; partial results were kept.[/]")
+        sys.exit(1)
 
     # Exit with appropriate code
     sys.exit(0 if success else 1)

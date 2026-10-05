@@ -158,6 +158,13 @@ class AndroidWorldHttpDriver(DeviceDriver):
         if not self._connected:
             await self.connect()
 
+    async def close(self) -> None:
+        """Close the underlying HTTP client (idempotent)."""
+        if self._client is not None:
+            await self._client.aclose()
+        self._client = None
+        self._connected = False
+
     @property
     def _http(self) -> httpx.AsyncClient:
         if self._client is None:
