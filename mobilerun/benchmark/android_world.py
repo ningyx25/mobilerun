@@ -63,6 +63,12 @@ _INITIALIZE_TIMEOUT = 600.0
 _SCORE_TIMEOUT = 120.0
 _RESET_TIMEOUT = 300.0
 _REINITIALIZE_TIMEOUT = 300.0
+# /state with wait_to_stabilize runs the server's internal stability loop
+# (up to ~6s); the reference client budgets 120s for it.
+_STABILIZE_TIMEOUT = 120.0
+# Second-chance score read for a completed-but-scored-0 episode, after the
+# final screen has had another beat to settle.
+_SCORE_RECHECK_DELAY_S = 1.0
 
 # Idempotent calls retry on transient server flakiness (same policy as the
 # reference client); connection errors retry for every call.
@@ -255,6 +261,24 @@ class AndroidWorldTaskClient:
             params={"task_type": task_type, "task_idx": task_idx},
         )
         return bool(data.get("start_on_home_screen"))
+
+    async def stabilize(self) -> None:
+        """Ask the server to wait for a stable screen.
+
+        The server scores from the live accessibility tree, so the screen
+        must be settled at /task/score time. The official docker runner gets
+        this for free: its agent reads every observation with
+        ``wait_to_stabilize=True`` (``transition_pause=None`` ->
+        ``get_post_transition_state``), so the final frame of an episode is
+        already stable. This call reproduces that guarantee for a
+        client-side episode before scoring.
+        """
+        await self._request(
+            "POST",
+            "/state",
+            params={"wait_to_stabilize": True},
+            timeout=_STABILIZE_TIMEOUT,
+        )
 
     async def get_score(self, task_type: str, task_idx: int) -> float:
         data = await self._request(
@@ -790,8 +814,29 @@ async def run_androidworld_benchmark(
                 result.finished = declared_done
 
                 # Score before tear_down: the server evaluates live device
-                # state and requires the task to still be initialized.
+                # state and requires the task to still be initialized. Settle
+                # the screen first (the official runner's episode ends on a
+                # stabilized frame) so the tree the server reads reflects the
+                # agent's final action instead of a mid-animation snapshot.
+                # Best-effort: a failed settle must not cost a good episode; a
+                # score read that follows can itself surface a real outage.
+                try:
+                    await client.stabilize()
+                except Exception as exc:  # noqa: BLE001 - best effort
+                    logger.warning("stabilize before scoring failed: %s", exc)
                 result.score = await client.get_score(task_type, task_idx)
+                # Second chance: a declared-done episode that scored 0 may have
+                # been judged on a frame that was still settling; give the UI
+                # another beat and keep the better reading.
+                if declared_done and not result.score:
+                    await asyncio.sleep(_SCORE_RECHECK_DELAY_S)
+                    try:
+                        await client.stabilize()
+                    except Exception as exc:  # noqa: BLE001 - best effort
+                        logger.warning("stabilize before re-scoring failed: %s", exc)
+                    result.score = max(
+                        result.score, await client.get_score(task_type, task_idx)
+                    )
                 result.gated_score = result.score if declared_done else 0.0
             except Exception as exc:  # noqa: BLE001 - record and continue
                 result.error = f"{type(exc).__name__}: {exc}"
