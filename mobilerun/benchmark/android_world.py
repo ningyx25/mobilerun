@@ -28,7 +28,7 @@ import difflib
 import json
 import logging
 import time
-from dataclasses import asdict, dataclass, fields
+from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
@@ -42,6 +42,7 @@ from mobilerun.agent.droid.events import ManagerPlanEvent
 from mobilerun.agent.external import list_agents
 from mobilerun.agent.utils.llm_loader import load_agent_llms
 from mobilerun.agent.utils.llm_picker import load_llm
+from mobilerun.benchmark.evidence import EpisodeEvidence, gather_ui_tree
 from mobilerun.config_manager import ConfigLoader
 from mobilerun.log_handlers import CLILogHandler, configure_logging
 from mobilerun.tools.driver.android_world import (
@@ -322,6 +323,16 @@ class TaskResult:
     duration_s: Optional[float] = None
     error: Optional[str] = None
     timestamp: str = ""
+    # -- evidence (all optional; populated when evidence_dir is enabled) --
+    complexity: Optional[float] = None
+    start_on_home_screen: Optional[bool] = None
+    max_steps: Optional[int] = None
+    evidence_dir: str = ""
+    trajectory_dir: str = ""
+    usage_totals: Optional[Dict[str, int]] = None
+    conversation_path: Optional[str] = None
+    timeline_path: Optional[str] = None
+    ui_tree_paths: List[str] = field(default_factory=list)
 
     @property
     def key(self) -> str:
@@ -437,6 +448,86 @@ def _load_run_meta(path: Path) -> Dict[str, Any]:
     return {k: v for k, v in data.items() if k != "tasks"}
 
 
+def _sanitize_name(value: str) -> str:
+    """Filesystem-safe component for an evidence directory name."""
+    return "".join(c if c.isalnum() or c in "._-" else "_" for c in value)
+
+
+def _write_run_manifest(
+    path: Path, run_meta: Dict[str, Any], results: Dict[str, TaskResult]
+) -> None:
+    """Human-readable run document: metadata + every task + summary + usage."""
+    tasks = sorted(results.values(), key=lambda r: (r.task_type, r.task_idx))
+    scored = [r for r in tasks if r.score is not None]
+    scored_finished = [r for r in scored if r.finished]
+    usage: Dict[str, int] = {}
+    for result in tasks:
+        for key, value in (result.usage_totals or {}).items():
+            usage[key] = usage.get(key, 0) + int(value or 0)
+    summary = {
+        "tasks": len(tasks),
+        "scored": len(scored),
+        "errors": sum(1 for r in tasks if r.error is not None),
+        "mean_score": (sum(r.score for r in scored) / len(scored)) if scored else 0.0,
+        "mean_gated_score": (
+            (sum(r.gated_score or 0.0 for r in scored) / len(scored)) if scored else 0.0
+        ),
+        "completion_rate": (len(scored_finished) / len(scored)) if scored else 0.0,
+        "total_tokens": usage.get("total_tokens", 0),
+        "total_requests": usage.get("requests", 0),
+    }
+    payload = dict(run_meta)
+    payload["summary"] = summary
+    payload["tasks"] = [asdict(result) for result in tasks]
+    _write_json(path, payload)
+
+
+def _write_json(path: Path, payload: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp = path.with_suffix(path.suffix + ".tmp")
+    temp.write_text(
+        json.dumps(payload, indent=2, ensure_ascii=False, default=str),
+        encoding="utf-8",
+    )
+    temp.replace(path)
+
+
+def _finalize_episode_evidence(
+    evidence: EpisodeEvidence,
+    result: TaskResult,
+    agent: Optional[MobileAgent],
+    ui_tree_before: Optional[Dict[str, Any]],
+    ui_tree_after: Optional[Dict[str, Any]],
+) -> None:
+    """Write every remaining artifact for a finished episode (best-effort)."""
+    try:
+        if agent is not None:
+            trajectory = getattr(agent, "trajectory", None)
+            if trajectory is not None:
+                result.trajectory_dir = (
+                    evidence.adopt_trajectory(trajectory.trajectory_folder) or ""
+                )
+            shared_state = getattr(agent, "shared_state", None)
+            if shared_state is not None:
+                result.conversation_path = evidence.write_conversation(
+                    list(getattr(shared_state, "message_history", []) or [])
+                )
+        result.ui_tree_paths = [
+            name
+            for name in (
+                evidence.write_ui_tree("ui_tree_before", ui_tree_before),
+                evidence.write_ui_tree("ui_tree_after", ui_tree_after),
+            )
+            if name
+        ]
+        result.timeline_path = evidence.write_timeline()
+        result.usage_totals = dict(evidence.usage_totals)
+        result.evidence_dir = str(evidence.dir)
+        evidence.write_manifest(asdict(result))
+    except Exception as exc:  # noqa: BLE001 - evidence must never fail a run
+        logger.warning("Episode evidence finalize failed: %s", exc)
+
+
 # Provenance fields that, when changed, make resumed records incomparable.
 _RESUME_PROVENANCE_FIELDS = (
     "server_url",
@@ -543,6 +634,7 @@ async def run_androidworld_benchmark(
     health_timeout: float = 900.0,
     task_timeout: float = 1000.0,
     save_trajectory: Optional[str] = None,
+    capture_evidence: bool = True,
     telemetry: Optional[bool] = False,
     provider: Optional[str] = None,
     model: Optional[str] = None,
@@ -594,6 +686,9 @@ async def run_androidworld_benchmark(
         return False
     if save_trajectory is not None:
         config.logging.save_trajectory = save_trajectory
+    if capture_evidence and config.logging.save_trajectory == "none":
+        # Evidence needs the agent's raw events; turn trajectory capture on.
+        config.logging.save_trajectory = "step"
     if telemetry is not None:
         config.telemetry.enabled = telemetry
 
@@ -605,6 +700,8 @@ async def run_androidworld_benchmark(
             f"runs/{_BENCHMARK_NAME}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
         )
     output_path = Path(output)
+    # One directory per episode under <output>/evidences/ holds every artifact.
+    evidence_root = output_path.parent / f"{output_path.stem}_evidence"
 
     client = AndroidWorldTaskClient(server_url)
     driver: Optional[AndroidWorldHttpDriver] = None
@@ -623,6 +720,8 @@ async def run_androidworld_benchmark(
         "seed": seed,
         "n_task_combinations": n_task_combinations,
         "results_path": str(output_path),
+        "capture_evidence": capture_evidence,
+        "evidence_root": str(evidence_root) if capture_evidence else None,
     }
 
     try:
@@ -764,18 +863,31 @@ async def run_androidworld_benchmark(
             )
             task_started = time.monotonic()
             initialized = False
+            evidence: Optional[EpisodeEvidence] = None
+            agent: Optional[MobileAgent] = None
+            ui_tree_before: Optional[Dict[str, Any]] = None
+            ui_tree_after: Optional[Dict[str, Any]] = None
+            if capture_evidence:
+                evidence = EpisodeEvidence(
+                    evidence_root / f"{_sanitize_name(task_type)}_{task_idx}",
+                    task_type,
+                    task_idx,
+                )
             try:
                 await client.initialize_task(task_type, task_idx)
                 initialized = True
                 result.goal = await client.get_goal(task_type, task_idx)
                 complexity = await client.get_complexity(task_type, task_idx)
                 start_on_home = await client.start_on_home_screen(task_type, task_idx)
+                result.complexity = complexity
+                result.start_on_home_screen = start_on_home
                 # Fresh episode: reset with go_home mirroring the task's
                 # start_on_home_screen, exactly like the reference runner's
                 # agent.reset(start_on_home_screen).
                 await client.reset(go_home=start_on_home)
 
                 max_steps = steps if steps is not None else int(10 * complexity)
+                result.max_steps = max_steps
                 task_config = copy.deepcopy(config)
                 task_config.agent.max_steps = max_steps
 
@@ -787,6 +899,11 @@ async def run_androidworld_benchmark(
                     timeout=task_timeout,
                     runtype="benchmark",
                 )
+                if evidence is not None:
+                    # The real accessibility tree (empty under vision_only
+                    # providers), read straight from the driver. Polls briefly
+                    # because the tree is empty mid-transition after reset.
+                    ui_tree_before = await gather_ui_tree(driver)
                 handler = agent.run()
                 manager_answered = False
                 async for event in handler.stream_events():
@@ -797,6 +914,8 @@ async def run_androidworld_benchmark(
                         and (event.answer or "").strip()
                     ):
                         manager_answered = True
+                    if evidence is not None:
+                        evidence.record_event(event)
                 run_result = await handler
 
                 result.success = bool(run_result.success)
@@ -867,6 +986,10 @@ async def run_androidworld_benchmark(
                         break
             finally:
                 result.duration_s = time.monotonic() - task_started
+                if evidence is not None and ui_tree_after is None:
+                    # Capture the final device state right before tear_down, so
+                    # every outcome (success, error, timeout) gets a snapshot.
+                    ui_tree_after = await gather_ui_tree(driver)
                 if initialized:
                     try:
                         await client.tear_down(task_type, task_idx)
@@ -874,6 +997,10 @@ async def run_androidworld_benchmark(
                         console.print(
                             f"[yellow]⚠️ tear_down for {task_type} failed: {exc}[/]"
                         )
+                if evidence is not None:
+                    _finalize_episode_evidence(
+                        evidence, result, agent, ui_tree_before, ui_tree_after
+                    )
 
             results[key] = result
             run_meta["finished_at"] = datetime.now().isoformat(timespec="seconds")
@@ -896,6 +1023,9 @@ async def run_androidworld_benchmark(
         run_meta["finished_at"] = datetime.now().isoformat(timespec="seconds")
         _write_results(output_path, run_meta, results)
         console.print(f"💾 Results written to [cyan]{output_path}[/]")
+        if capture_evidence:
+            _write_run_manifest(output_path, run_meta, results)
+            console.print(f"🗂️  Evidence written to [cyan]{evidence_root}[/]")
 
         ordered = [
             results[f"{name}#{task_idx}"]
