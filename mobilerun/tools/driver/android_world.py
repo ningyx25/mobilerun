@@ -299,7 +299,8 @@ class AndroidWorldHttpDriver(DeviceDriver):
         return True
 
     async def press_button(self, button: str) -> None:
-        button_lower = button.lower()
+        # Tolerate values wrapped in stray whitespace/newlines.
+        button_lower = str(button or "").strip().lower()
         if button_lower not in self.supported_buttons:
             raise ValueError(
                 f"Button '{button}' not supported. "

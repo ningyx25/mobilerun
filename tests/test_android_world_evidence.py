@@ -9,7 +9,6 @@ the result row.
 
 import asyncio
 import json
-import logging
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -24,18 +23,7 @@ def run(coro):
     return asyncio.run(coro)
 
 
-@pytest.fixture(autouse=True)
-def restore_mobilerun_logger():
-    """Undo the global logging changes ``_setup_benchmark_logging`` makes.
-
-    It reconfigures the ``mobilerun`` logger (handlers, level, propagate) for
-    the CLI run; leaking that into later tests would silence their log
-    assertions.
-    """
-    log = logging.getLogger("mobilerun")
-    saved = (list(log.handlers), log.level, log.propagate)
-    yield log
-    log.handlers, log.level, log.propagate = saved[0], saved[1], saved[2]
+# The autouse ``restore_mobilerun_logger`` fixture lives in tests/conftest.py.
 
 
 # ---------------------------------------------------------------------------

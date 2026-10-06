@@ -22,6 +22,17 @@ logger = logging.getLogger("mobilerun")
 _MACRO_FOCUS_SETTLE_SECONDS = 0.5
 
 
+def _normalize_choice(value: object) -> str:
+    """Normalize an enum-style tool parameter.
+
+    Models frequently wrap parameter values in stray whitespace/newlines
+    (e.g. ``"<parameter name=\"button\">\\nback\\n</parameter>"``). Stripping
+    here keeps such values matching against the supported-value sets instead
+    of failing validation.
+    """
+    return str(value or "").strip()
+
+
 # ---------------------------------------------------------------------------
 # Core UI actions
 # ---------------------------------------------------------------------------
@@ -460,6 +471,8 @@ async def type_text_direct(
 
 async def system_button(button: str, *, ctx: "ActionContext") -> ActionResult:
     """Press a system button (back, home, or enter)."""
+    # Models sometimes wrap the value in newlines (see _normalize_choice).
+    button = _normalize_choice(button)
     try:
         pre_ui = await _macro_pre_ui(ctx)
         await ctx.driver.press_button(button)
@@ -563,8 +576,8 @@ async def open_bundle_id(
     ctx: "ActionContext",
 ) -> ActionResult:
     """Open an app by exact package name, app id, or iOS bundle identifier."""
-    # Models sometimes end parameter values with a newline.
-    identifier = str(app_id or bundle_id or "").strip()
+    # Models sometimes end parameter values with a newline (see _normalize_choice).
+    identifier = _normalize_choice(app_id or bundle_id)
     if not identifier:
         return ActionResult(
             success=False,
