@@ -23,18 +23,7 @@ def run(coro):
     return asyncio.run(coro)
 
 
-@pytest.fixture(autouse=True)
-def restore_mobilerun_logger():
-    """Undo the global logging changes ``_setup_benchmark_logging`` makes.
-
-    It reconfigures the ``mobilerun`` logger (handlers, level, propagate) for
-    the CLI run; leaking that into later tests would silence their log
-    assertions.
-    """
-    log = logging.getLogger("mobilerun")
-    saved = (list(log.handlers), log.level, log.propagate)
-    yield log
-    log.handlers, log.level, log.propagate = saved[0], saved[1], saved[2]
+# The autouse ``restore_mobilerun_logger`` fixture lives in tests/conftest.py.
 
 
 # ---------------------------------------------------------------------------
@@ -310,6 +299,9 @@ class FakeTaskClient:
     async def stabilize(self):
         self.calls.append(("stabilize",))
 
+    async def execute_action(self, action):
+        self.calls.append(("execute_action", action))
+
     async def get_score(self, task_type, task_idx):
         self.calls.append(("score", task_type, task_idx))
         return self.score
@@ -362,13 +354,20 @@ class FakeHandler:
 
 
 def make_fake_agent_class(
-    *, shared_success=True, success=True, steps=5, reason="done", events=()
+    *,
+    shared_success=True,
+    success=True,
+    steps=5,
+    reason="done",
+    events=(),
+    answer="",
 ):
     """Fake MobileAgent.
 
     ``shared_success`` models ``shared_state.success`` — the direct-mode
     completion signal (None means complete() never ran); ``events`` are
-    yielded from the stream (reasoning mode's manager-answer signal).
+    yielded from the stream (reasoning mode's manager-answer signal);
+    ``answer`` is ``shared_state.answer`` (preferred for answer submission).
     """
 
     class FakeAgent:
@@ -381,7 +380,7 @@ def make_fake_agent_class(
             self.config = config
             self.driver = driver
             self.timeout = timeout
-            self.shared_state = SimpleNamespace(success=shared_success)
+            self.shared_state = SimpleNamespace(success=shared_success, answer=answer)
             FakeAgent.instances.append(self)
 
         def run(self):
@@ -432,7 +431,10 @@ def test_episode_order_and_gated_score(monkeypatch, tmp_path):
         ("complexity", "ClockStopWatchRunning", 0),
         ("start_on_home_screen", "ClockStopWatchRunning", 0),
         ("reset", True),
-        # the screen is stabilized before scoring, and scoring precedes tear_down
+        # the episode's answer is submitted after it finishes (here the
+        # FakeAgent's shared_state.answer), then the screen is stabilized and
+        # scored, and scoring precedes tear_down.
+        ("execute_action", {"action_type": "answer", "text": "done"}),
         ("stabilize",),
         ("score", "ClockStopWatchRunning", 0),
         ("tear_down", "ClockStopWatchRunning", 0),
@@ -475,6 +477,29 @@ def test_gated_score_is_zero_when_agent_did_not_finish(monkeypatch, tmp_path):
     assert entry["score"] == 1.0
     assert entry["gated_score"] == 0.0
     assert entry["finished"] is False
+    # An episode the agent never declared done submits no answer.
+    assert not any(call[0] == "execute_action" for call in client.calls)
+
+
+def test_answer_is_submitted_before_scoring(monkeypatch, tmp_path):
+    """P0: information-retrieval tasks score only from the submitted answer,
+    so the `answer` action must be sent before get_score."""
+    client = FakeTaskClient(tasks=("NotesIsTodo",), score=1.0)
+    agent_class = make_fake_agent_class(shared_success=True, answer="True")
+    patch_benchmark(monkeypatch, client, agent_class)
+
+    run(
+        bench.run_androidworld_benchmark(
+            server_url="http://localhost:5000", output=str(tmp_path / "r.json")
+        )
+    )
+
+    names = [call[0] for call in client.calls]
+    answer = next(c for c in client.calls if c[0] == "execute_action")
+    assert answer[1] == {"action_type": "answer", "text": "True"}
+    assert names.index("execute_action") < names.index("score")
+    # ... and the answer is submitted after the agent has run (after reset).
+    assert names.index("reset") < names.index("execute_action")
 
 
 def test_completed_episode_scored_zero_is_rechecked(monkeypatch, tmp_path):
@@ -812,7 +837,6 @@ def test_connection_failure_waits_then_aborts(monkeypatch, tmp_path):
 
 
 def test_quiet_logging_raises_threshold(monkeypatch):
-    import logging
 
     bench._setup_benchmark_logging(debug=False, verbose=False)
     assert logging.getLogger("mobilerun").level == logging.ERROR
