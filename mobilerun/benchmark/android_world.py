@@ -126,13 +126,19 @@ class AndroidWorldTaskClient:
         path: str,
         *,
         params: Optional[dict] = None,
+        json: Any = None,
+        retry_statuses: Optional[frozenset] = _RETRY_STATUSES,
         timeout: Optional[float] = None,
     ) -> Any:
         last_error: Optional[Exception] = None
         for attempt in range(1, _RETRY_ATTEMPTS + 1):
             try:
                 response = await self._client.request(
-                    method, path, params=params, timeout=timeout or self.timeout
+                    method,
+                    path,
+                    params=params,
+                    json=json,
+                    timeout=timeout or self.timeout,
                 )
             except httpx.TransportError as exc:
                 last_error = exc
@@ -152,7 +158,11 @@ class AndroidWorldTaskClient:
                     f"{method} {self.base_url}{path} failed: {exc}"
                 ) from exc
 
-            if response.status_code in _RETRY_STATUSES and attempt < _RETRY_ATTEMPTS:
+            if (
+                attempt < _RETRY_ATTEMPTS
+                and retry_statuses
+                and response.status_code in retry_statuses
+            ):
                 logger.debug(
                     "%s %s got %d; retry %d/%d in %.0fs",
                     method,
@@ -279,6 +289,20 @@ class AndroidWorldTaskClient:
             "/state",
             params={"wait_to_stabilize": True},
             timeout=_STABILIZE_TIMEOUT,
+        )
+
+    async def execute_action(self, action: dict) -> None:
+        """Execute a JSON action server-side (``/execute_action``).
+
+        HTTP-status retries are disabled: a non-idempotent action may already
+        have run server-side, so only connection-level errors retry.
+        """
+        await self._request(
+            "POST",
+            "/execute_action",
+            json=action,
+            retry_statuses=frozenset(),
+            timeout=_SCORE_TIMEOUT,
         )
 
     async def get_score(self, task_type: str, task_idx: int) -> float:
@@ -451,6 +475,27 @@ def _load_run_meta(path: Path) -> Dict[str, Any]:
 def _sanitize_name(value: str) -> str:
     """Filesystem-safe component for an evidence directory name."""
     return "".join(c if c.isalnum() or c in "._-" else "_" for c in value)
+
+
+async def _submit_episode_answer(
+    client: "AndroidWorldTaskClient", agent: MobileAgent, reason: str
+) -> None:
+    """Submit the agent's answer into the server's interaction_cache.
+
+    Answer-type (information retrieval) tasks are graded purely from the text
+    submitted through the ``answer`` action, so an episode that never submits
+    one always scores 0 regardless of correctness. Prefer the agent's own
+    finish answer (``shared_state.answer``) and fall back to the episode
+    reason. Best-effort: a submission failure must not fail the episode.
+    """
+    answer = getattr(agent.shared_state, "answer", "") or reason or ""
+    answer = str(answer).strip()
+    if not answer:
+        return
+    try:
+        await client.execute_action({"action_type": "answer", "text": answer})
+    except Exception as exc:  # noqa: BLE001 - best effort
+        logger.warning("Submitting the episode answer failed: %s", exc)
 
 
 def _write_run_manifest(
@@ -931,6 +976,16 @@ async def run_androidworld_benchmark(
                 else:
                     declared_done = agent.shared_state.success is not None
                 result.finished = declared_done
+
+                # Answer-type tasks (information retrieval) are graded only
+                # from the text the agent submits via the `answer` action into
+                # the server's interaction_cache -- the score never looks at
+                # the screen. Submit it after the episode but before scoring
+                # (and before any further device action) so those tasks are
+                # gradable; UI-scored tasks ignore this cache, so it is safe
+                # for them too.
+                if declared_done:
+                    await _submit_episode_answer(client, agent, run_result.reason)
 
                 # Score before tear_down: the server evaluates live device
                 # state and requires the task to still be initialized. Settle
