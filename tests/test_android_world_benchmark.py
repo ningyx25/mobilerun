@@ -8,6 +8,7 @@ selection, resume, and results IO without a docker container or an LLM.
 
 import asyncio
 import json
+import logging
 from types import SimpleNamespace
 
 import httpx
@@ -20,6 +21,20 @@ from mobilerun.config_manager.config_manager import MobileConfig
 
 def run(coro):
     return asyncio.run(coro)
+
+
+@pytest.fixture(autouse=True)
+def restore_mobilerun_logger():
+    """Undo the global logging changes ``_setup_benchmark_logging`` makes.
+
+    It reconfigures the ``mobilerun`` logger (handlers, level, propagate) for
+    the CLI run; leaking that into later tests would silence their log
+    assertions.
+    """
+    log = logging.getLogger("mobilerun")
+    saved = (list(log.handlers), log.level, log.propagate)
+    yield log
+    log.handlers, log.level, log.propagate = saved[0], saved[1], saved[2]
 
 
 # ---------------------------------------------------------------------------
