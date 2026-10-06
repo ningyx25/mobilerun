@@ -733,6 +733,12 @@ async def run(
 )
 @click.option("--debug/--no-debug", default=None, help="Enable verbose debug logging")
 @click.option(
+    "--evidence/--no-evidence",
+    default=True,
+    help="Record a rich per-episode evidence bundle (trajectories, "
+    "conversation, UI trees, timeline, token usage)",
+)
+@click.option(
     "--verbose", is_flag=True, default=False, help="Stream agent logs while running"
 )
 @click.option(
@@ -762,6 +768,7 @@ async def runbench(
     api_base: str | None,
     temperature: float | None,
     debug: bool | None,
+    evidence: bool,
     verbose: bool,
     dry_run: bool,
 ):
@@ -788,6 +795,7 @@ async def runbench(
             health_timeout=health_timeout,
             task_timeout=task_timeout,
             save_trajectory=save_trajectory,
+            capture_evidence=evidence,
             telemetry=telemetry,
             provider=provider,
             model=model,

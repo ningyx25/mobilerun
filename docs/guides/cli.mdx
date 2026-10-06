@@ -265,6 +265,7 @@ mobilerun runbench --benchmark-name androidworld [OPTIONS]
 | `--difficulty` | Only run `easy`, `medium` and/or `hard` tasks | All |
 | `--steps` | Max steps per task | `10 x task complexity` |
 | `--output`, `-o` | Results JSON path | `runs/androidworld_<timestamp>.json` |
+| `--evidence` / `--no-evidence` | Record a rich per-episode evidence bundle | `true` |
 | `--resume` | Skip tasks already recorded in the output file | `false` |
 | `--dry-run` | List the selected tasks and exit | `false` |
 | `--provider` / `--model` | LLM provider/model override | From config |
@@ -285,6 +286,29 @@ mobilerun runbench --benchmark-name androidworld -d http://localhost:5000 \
 Results are recorded per task (server score plus an AndroidWorld-style gated
 score that is 0 unless the agent declared the episode finished), written
 incrementally to the output JSON, and summarized by difficulty at the end.
+
+### Evidence bundle
+
+By default every episode also gets a full evidence directory, so a run can be
+audited and debugged after the fact:
+
+```
+runs/androidworld_<timestamp>.json            # run document: metadata + tasks + summary (incl. total tokens)
+runs/androidworld_<timestamp>_evidence/
+  <Task>_<idx>/
+    episode.json          # score, goal, complexity, max_steps, error, usage, paths
+    timeline.json         # distilled per-step timeline (thought / raw LLM response /
+                          #   tool call + result / observation) + cumulative token usage
+    conversation.json     # the full LLM conversation (system/user, injected device state)
+    ui_tree_before.json   # real accessibility tree before the episode
+    ui_tree_after.json    # real accessibility tree the server scored
+    trajectory/           # the agent's own artifacts: trajectory.json, per-step
+                          #   screenshots/ and macro.json
+```
+
+The result row references its bundle (`evidence_dir`, `trajectory_dir`,
+`timeline_path`, `conversation_path`, `ui_tree_paths`, `usage_totals`). Pass
+`--no-evidence` to skip it (faster, less disk).
 
   </Tab>
 
