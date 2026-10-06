@@ -307,6 +307,9 @@ class FakeTaskClient:
         self.calls.append(("start_on_home_screen", task_type, task_idx))
         return True
 
+    async def stabilize(self):
+        self.calls.append(("stabilize",))
+
     async def get_score(self, task_type, task_idx):
         self.calls.append(("score", task_type, task_idx))
         return self.score
@@ -424,13 +427,11 @@ def test_episode_order_and_gated_score(monkeypatch, tmp_path):
         ("complexity", "ClockStopWatchRunning", 0),
         ("start_on_home_screen", "ClockStopWatchRunning", 0),
         ("reset", True),
+        # the screen is stabilized before scoring, and scoring precedes tear_down
+        ("stabilize",),
         ("score", "ClockStopWatchRunning", 0),
         ("tear_down", "ClockStopWatchRunning", 0),
     ]
-    # score must be read before tear_down
-    assert lifecycle.index(("score", "ClockStopWatchRunning", 0)) < lifecycle.index(
-        ("tear_down", "ClockStopWatchRunning", 0)
-    )
 
     # The agent ran with the canonical step budget (10 x complexity).
     agent = agent_class.instances[0]
@@ -469,6 +470,81 @@ def test_gated_score_is_zero_when_agent_did_not_finish(monkeypatch, tmp_path):
     assert entry["score"] == 1.0
     assert entry["gated_score"] == 0.0
     assert entry["finished"] is False
+
+
+def test_completed_episode_scored_zero_is_rechecked(monkeypatch, tmp_path):
+    """A declared-done episode that reads 0 is re-scored after the UI settles
+    once more, and the better reading wins (fixes the stabilize race)."""
+
+    class FlakyScoreClient(FakeTaskClient):
+        def __init__(self):
+            super().__init__(tasks=("ClockStopWatchRunning",))
+            self.score_reads = 0
+
+        async def get_score(self, task_type, task_idx):
+            self.calls.append(("score", task_type, task_idx))
+            self.score_reads += 1
+            return 1.0 if self.score_reads >= 2 else 0.0
+
+    client = FlakyScoreClient()
+    patch_benchmark(monkeypatch, client, make_fake_agent_class(shared_success=True))
+
+    run(
+        bench.run_androidworld_benchmark(
+            server_url="http://localhost:5000", output=str(tmp_path / "r.json")
+        )
+    )
+
+    entry = json.loads((tmp_path / "r.json").read_text())["tasks"][0]
+    assert entry["score"] == 1.0
+    assert entry["gated_score"] == 1.0
+    # stabilize before each of the two score reads
+    assert client.calls.count(("stabilize",)) == 2
+
+
+def test_stabilize_failure_does_not_lose_a_scored_episode(monkeypatch, tmp_path):
+    """A failed settle-before-scoring is best-effort: the score read still
+    happens and a good episode is recorded rather than turned into an error."""
+
+    class StabilizeFailsClient(FakeTaskClient):
+        async def stabilize(self):
+            self.calls.append(("stabilize",))
+            raise RuntimeError("server busy")
+
+    client = StabilizeFailsClient(tasks=("ClockStopWatchRunning",), score=1.0)
+    patch_benchmark(monkeypatch, client, make_fake_agent_class(shared_success=True))
+
+    run(
+        bench.run_androidworld_benchmark(
+            server_url="http://localhost:5000", output=str(tmp_path / "r.json")
+        )
+    )
+
+    entry = json.loads((tmp_path / "r.json").read_text())["tasks"][0]
+    assert entry["error"] is None
+    assert entry["score"] == 1.0
+    assert entry["gated_score"] == 1.0
+
+
+def test_unfinished_episode_is_not_rechecked(monkeypatch, tmp_path):
+    """An episode the agent never declared done is scored once and gated to 0;
+    the second-chance read is reserved for declared-done episodes."""
+
+    class ZeroClient(FakeTaskClient):
+        def __init__(self):
+            super().__init__(tasks=("ClockStopWatchRunning",), score=0.0)
+
+    client = ZeroClient()
+    patch_benchmark(monkeypatch, client, make_fake_agent_class(shared_success=None))
+
+    run(
+        bench.run_androidworld_benchmark(
+            server_url="http://localhost:5000", output=str(tmp_path / "r.json")
+        )
+    )
+
+    assert client.calls.count(("stabilize",)) == 1
+    assert client.calls.count(("score", "ClockStopWatchRunning", 0)) == 1
 
 
 def test_reasoning_mode_gating_uses_manager_answer(monkeypatch, tmp_path):
