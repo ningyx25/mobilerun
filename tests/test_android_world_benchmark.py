@@ -339,6 +339,11 @@ class FakeDriver:
     async def close(self):
         self.closed = True
 
+    async def get_ui_tree(self):
+        # Populated tree so evidence's gather_ui_tree returns immediately
+        # instead of polling.
+        return {"a11y_tree": {"children": [{"text": "x"}]}, "phone_state": {}}
+
 
 class FakeHandler:
     def __init__(self, result, events=()):
