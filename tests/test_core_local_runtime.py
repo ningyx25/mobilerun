@@ -43,6 +43,7 @@ def test_create_driver_passes_portal_mode(monkeypatch):
                 platform="android",
                 auto_setup=False,
                 portal_mode="disabled",
+                control_backend=None,
             )
         ),
     )
@@ -86,6 +87,7 @@ def test_create_driver_disabled_portal_mode_skips_auto_setup(monkeypatch):
                 platform="android",
                 auto_setup=True,
                 portal_mode="disabled",
+                control_backend=None,
             )
         ),
     )
