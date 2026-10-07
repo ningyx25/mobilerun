@@ -294,6 +294,14 @@ def test_evidence_bundle_is_written_and_referenced(monkeypatch, tmp_path):
     assert (ev / "ui_tree_after.json").is_file()
     assert (ev / "trajectory" / "trajectory.json").is_file()
 
+    # The episode manifest carries run-level provenance so evidence and results
+    # can be cross-checked in both directions.
+    episode = json.loads((ev / "episode.json").read_text())
+    run_block = episode["run"]
+    assert run_block["run_id"] == entry["run_id"]
+    assert run_block["server_url"] == "http://localhost:5000"
+    assert run_block["benchmark"] == "androidworld"
+
     # result row references
     assert entry["trajectory_dir"] == "trajectory"
     assert entry["conversation_path"] == "conversation.json"

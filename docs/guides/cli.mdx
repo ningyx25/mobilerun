@@ -287,6 +287,24 @@ Results are recorded per task (server score plus an AndroidWorld-style gated
 score that is 0 unless the agent declared the episode finished), written
 incrementally to the output JSON, and summarized by difficulty at the end.
 
+The results file **accumulates**: writing to an existing `--output` merges
+rather than replaces, so sharded runs (`--task-index-range`), multiple
+servers, and `--resume` all contribute to one file. Each write is locked, so
+concurrent writers cannot clobber each other. To start over, delete the file
+or point `--output` somewhere new.
+
+Provenance is recorded at two levels:
+
+- `runs[]` — one entry per invocation: `run_id`, `server_url`, `model`, the
+  shard arguments (`task_index_range`, `tasks_filter`, `difficulty`), timing
+  and how many tasks it ran. Top-level `started_at`/`finished_at` span every
+  run; `updated_at` is the last write.
+- each task row carries `run_id` and `server_url`, so it can be traced back to
+  the invocation (and thus the shard and machine) that produced it.
+
+`summary` (including `total_runtime_s`, the sum of episode durations) is
+written on every update, with or without evidence capture.
+
 ### Evidence bundle
 
 By default every episode also gets a full evidence directory, so a run can be
