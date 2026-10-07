@@ -322,11 +322,17 @@ class ManagerAgent(Workflow):
 
             # Add screenshot if vision enabled
             if screenshot and self.vision:
-                if should_resize_model_screenshot(self.state_provider):
-                    screenshot = resize_model_screenshot_with_grid(
-                        self.state_provider, screenshot
+                try:
+                    if should_resize_model_screenshot(self.state_provider):
+                        screenshot = resize_model_screenshot_with_grid(
+                            self.state_provider, screenshot
+                        )
+                    messages[last_user_idx].blocks.append(ImageBlock(image=screenshot))
+                except Exception as e:  # noqa: BLE001
+                    # Skip an undecodable frame instead of failing the run.
+                    logger.warning(
+                        f"⚠️ Dropping undecodable screenshot for this step: {e}"
                     )
-                messages[last_user_idx].blocks.append(ImageBlock(image=screenshot))
 
             # Add previous device state to second-to-last user message
             if len(user_indices) >= 2:

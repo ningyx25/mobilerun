@@ -7,7 +7,12 @@ from .coordinate import (
     to_normalized,
 )
 from .geometry import find_clear_point, rects_overlap
-from .images import image_dimensions
+from .images import (
+    IncompleteImageError,
+    ensure_complete_image,
+    image_dimensions,
+    is_complete_image,
+)
 
 __all__ = [
     "find_clear_point",
@@ -16,5 +21,8 @@ __all__ = [
     "to_absolute",
     "to_normalized",
     "bounds_to_normalized",
+    "IncompleteImageError",
+    "ensure_complete_image",
     "image_dimensions",
+    "is_complete_image",
 ]

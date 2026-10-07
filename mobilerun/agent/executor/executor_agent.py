@@ -141,12 +141,18 @@ class ExecutorAgent(Workflow):
         if self.vision:
             screenshot = self.shared_state.screenshot
             if screenshot is not None:
-                if should_resize_model_screenshot(self.action_ctx.state_provider):
-                    screenshot = resize_model_screenshot_with_grid(
-                        self.action_ctx.state_provider, screenshot
+                try:
+                    if should_resize_model_screenshot(self.action_ctx.state_provider):
+                        screenshot = resize_model_screenshot_with_grid(
+                            self.action_ctx.state_provider, screenshot
+                        )
+                    messages[0].blocks.append(ImageBlock(image=screenshot))
+                    logger.debug("📸 Using screenshot for Executor")
+                except Exception as e:  # noqa: BLE001
+                    # Skip an undecodable frame instead of failing the run.
+                    logger.warning(
+                        f"⚠️ Dropping undecodable screenshot for the Executor: {e}"
                     )
-                messages[0].blocks.append(ImageBlock(image=screenshot))
-                logger.debug("📸 Using screenshot for Executor")
             else:
                 logger.warning("⚠️ Vision enabled but no screenshot available")
         await ctx.store.set("executor_messages", messages)

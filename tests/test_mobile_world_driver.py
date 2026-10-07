@@ -14,6 +14,7 @@ import httpx
 import pytest
 from PIL import Image
 
+from mobilerun.tools.driver import mobile_world
 from mobilerun.tools.driver.android_world import (
     looks_like_android_world_url,
 )
@@ -22,16 +23,21 @@ from mobilerun.tools.driver.mobile_world import (
     looks_like_mobile_world_url,
     validate_mobile_world_url,
 )
+from mobilerun.tools.helpers.images import is_complete_image
 
 
 def run(coro):
     return asyncio.run(coro)
 
 
-def _png_b64(width=1080, height=2400):
+def _png_bytes(width=1080, height=2400):
     buf = io.BytesIO()
     Image.new("RGB", (width, height), color=(10, 20, 30)).save(buf, format="PNG")
-    return base64.b64encode(buf.getvalue()).decode()
+    return buf.getvalue()
+
+
+def _png_b64(width=1080, height=2400):
+    return base64.b64encode(_png_bytes(width, height)).decode()
 
 
 UI_XML = (
@@ -267,11 +273,77 @@ def test_get_ui_tree_feeds_the_android_state_provider():
 
 
 def test_screenshot_decodes_b64_png():
-    driver, _ = make_driver()
+    driver, recorded = make_driver()
     data = run(driver.screenshot())
     image = Image.open(io.BytesIO(data))
     assert image.format == "PNG"
     assert image.size == (1080, 2400)
+    # The happy path is a single request: no retry overhead.
+    assert len([r for r in recorded if r.url.path == "/screenshot"]) == 1
+
+
+def _screenshot_sequence(monkeypatch, payloads):
+    """Serve per-call /screenshot payloads.
+
+    Each entry is either the b64 string to return, an ``int`` HTTP status to
+    fail with, or an ``Exception`` to raise. The last entry repeats forever.
+    """
+    calls = {"n": 0}
+    queue = list(payloads)
+
+    def responder(request):
+        index = min(calls["n"], len(queue) - 1)
+        calls["n"] += 1
+        payload = queue[index]
+        if isinstance(payload, Exception):
+            raise payload
+        if isinstance(payload, int):
+            return httpx.Response(payload, json={"detail": "device busy"})
+        return httpx.Response(200, json={"device": "emulator-5554", "b64_png": payload})
+
+    handlers = _handlers()
+    handlers[("GET", "/screenshot")] = responder
+    monkeypatch.setattr(mobile_world, "_SCREENSHOT_RETRY_SLEEP", 0)
+    return handlers, calls
+
+
+def _truncated_png_b64():
+    data = _png_bytes()
+    return base64.b64encode(data[: len(data) // 2]).decode()
+
+
+def test_screenshot_retries_a_truncated_frame(monkeypatch):
+    handlers, calls = _screenshot_sequence(
+        monkeypatch, [_truncated_png_b64(), _png_b64()]
+    )
+    driver, recorded = make_driver(handlers)
+
+    data = run(driver.screenshot())
+
+    assert is_complete_image(data)
+    assert calls["n"] == 2
+    assert len([r for r in recorded if r.url.path == "/screenshot"]) == 2
+
+
+def test_screenshot_raises_after_persistent_truncation(monkeypatch):
+    handlers, calls = _screenshot_sequence(monkeypatch, [_truncated_png_b64()])
+    driver, _ = make_driver(handlers)
+
+    with pytest.raises(RuntimeError, match="complete screenshot"):
+        run(driver.screenshot())
+
+    # Bounded: exactly _SCREENSHOT_ATTEMPTS requests, no more.
+    assert calls["n"] == mobile_world._SCREENSHOT_ATTEMPTS
+
+
+def test_screenshot_retries_a_server_500(monkeypatch):
+    handlers, calls = _screenshot_sequence(monkeypatch, [500, _png_b64()])
+    driver, _ = make_driver(handlers)
+
+    data = run(driver.screenshot())
+
+    assert is_complete_image(data)
+    assert calls["n"] == 2
 
 
 # ---------------------------------------------------------------------------

@@ -18,6 +18,7 @@ so the tree-based toolset (indexed click/type, element filtering) works.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 import logging
@@ -27,9 +28,10 @@ from urllib.parse import urlparse
 from xml.etree import ElementTree as ET
 
 import httpx
-from mobilerun_core_local.driver.base import DeviceDriver, unsupported
+from mobilerun_core_local.driver.base import DeviceDisconnectedError, DeviceDriver, unsupported
 
 from mobilerun.tools.driver.android_world import looks_like_http_url
+from mobilerun.tools.helpers.images import ensure_complete_image
 
 logger = logging.getLogger("mobilerun")
 
@@ -44,6 +46,13 @@ MOBILE_WORLD_PORT_PREFIX = "680"
 
 _DEFAULT_TIMEOUT = 30.0
 _STATE_TIMEOUT = 60.0
+
+# A screenshot fetch is retried when the frame comes back incomplete (the
+# server's exec-out capture can exit 0 while writing a truncated PNG). Keep
+# this small: the server already retries capture paths internally, so the
+# client layer only covers the residual rate; 2 x 3 rounds is the worst case.
+_SCREENSHOT_ATTEMPTS = 2
+_SCREENSHOT_RETRY_SLEEP = 0.5
 
 # MobileWorld's /step only implements these three key events; everything else
 # has no server-side action, so the driver advertises exactly this set and the
@@ -421,15 +430,43 @@ class MobileWorldHttpDriver(DeviceDriver):
     # -- state / observation -----------------------------------------------
 
     async def screenshot(self, hide_overlay: bool = True) -> bytes:
-        data = await self._get(
-            "/screenshot",
-            params={"device": self.device, "return_b64": True},
-            timeout=_STATE_TIMEOUT,
-        )
-        b64 = str(data.get("b64_png") or "")
-        if "," in b64:  # tolerate a data-URL prefix
-            b64 = b64.split(",")[-1]
-        return base64.b64decode(b64)
+        """Fetch a screenshot, retrying an incomplete frame.
+
+        The server's ``exec-out screencap`` path can exit 0 while writing a
+        truncated PNG (a strict prefix of a valid file). Such a frame must
+        never reach the agent's image pipeline: a decode failure there used to
+        abort the whole episode. Retry once, then raise -- every call site
+        already degrades to "skip this frame" on a failed capture.
+        """
+        last_error: Exception | None = None
+        for attempt in range(1, _SCREENSHOT_ATTEMPTS + 1):
+            try:
+                data = await self._get(
+                    "/screenshot",
+                    params={"device": self.device, "return_b64": True},
+                    timeout=_STATE_TIMEOUT,
+                )
+                b64 = str(data.get("b64_png") or "")
+                if "," in b64:  # tolerate a data-URL prefix
+                    b64 = b64.split(",")[-1]
+                image = base64.b64decode(b64)
+                return ensure_complete_image(image, source="/screenshot b64_png")
+            except DeviceDisconnectedError:
+                raise
+            except Exception as exc:  # noqa: BLE001 - retried, then reported
+                last_error = exc
+                logger.warning(
+                    "Screenshot attempt %d/%d failed: %s",
+                    attempt,
+                    _SCREENSHOT_ATTEMPTS,
+                    exc,
+                )
+                if attempt < _SCREENSHOT_ATTEMPTS:
+                    await asyncio.sleep(_SCREENSHOT_RETRY_SLEEP)
+        raise RuntimeError(
+            f"Failed to capture a complete screenshot from {self.url} after "
+            f"{_SCREENSHOT_ATTEMPTS} attempts: {last_error}"
+        ) from last_error
 
     async def get_ui_tree(self) -> Dict[str, Any]:
         """Fetch /xml (uiautomator) and convert it to the portal state dict."""

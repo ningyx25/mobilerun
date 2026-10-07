@@ -350,13 +350,21 @@ class FastAgent(Workflow):
 
             # Screenshot → last user message
             if self.vision and screenshot:
-                if should_resize_model_screenshot(self.state_provider):
-                    screenshot = resize_model_screenshot_with_grid(
-                        self.state_provider, screenshot
+                try:
+                    if should_resize_model_screenshot(self.state_provider):
+                        screenshot = resize_model_screenshot_with_grid(
+                            self.state_provider, screenshot
+                        )
+                    messages_to_send[last_user_idx].blocks.append(
+                        ImageBlock(image=screenshot)
                     )
-                messages_to_send[last_user_idx].blocks.append(
-                    ImageBlock(image=screenshot)
-                )
+                except Exception as e:  # noqa: BLE001
+                    # An undecodable frame is not worth failing the episode
+                    # over: skip it and run this step without vision. Do NOT
+                    # attach the raw bytes -- the provider would reject them.
+                    logger.warning(
+                        f"⚠️ Dropping undecodable screenshot for this step: {e}"
+                    )
 
             # Previous device state → second-to-last user message
             if len(user_indices) >= 2:

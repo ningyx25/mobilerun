@@ -223,11 +223,15 @@ class StatelessManagerAgent(Workflow):
         messages = [{"role": "user", "content": [{"text": prompt_text}]}]
 
         if self.vision and screenshot:
-            if should_resize_model_screenshot(self.state_provider):
-                screenshot = resize_model_screenshot_with_grid(
-                    self.state_provider, screenshot
-                )
-            messages[0]["content"].append({"image": screenshot})
+            try:
+                if should_resize_model_screenshot(self.state_provider):
+                    screenshot = resize_model_screenshot_with_grid(
+                        self.state_provider, screenshot
+                    )
+                messages[0]["content"].append({"image": screenshot})
+            except Exception as e:  # noqa: BLE001
+                # Skip an undecodable frame instead of failing the run.
+                logger.warning(f"⚠️ Dropping undecodable screenshot for this step: {e}")
 
         chat_messages = to_chat_messages(messages)
 

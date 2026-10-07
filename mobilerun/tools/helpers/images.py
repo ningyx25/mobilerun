@@ -10,6 +10,19 @@ from PIL import Image, ImageDraw, ImageFont
 
 MODEL_SCREENSHOT_MAX_SIDE = 2048
 
+PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
+_JPEG_SOI = b"\xff\xd8"
+_JPEG_EOI = b"\xff\xd9"
+_PNG_IEND_CHUNK = b"\x00\x00\x00\x00IEND\xaeB`\x82"
+# Scan a small window at the tail instead of a strict suffix test: a writer
+# that ever appends a trailing byte would otherwise make every frame look
+# incomplete, blinding the whole run.
+_TAIL_SCAN_BYTES = 32
+
+
+class IncompleteImageError(ValueError):
+    """Image bytes are structurally incomplete (e.g. a cut byte stream)."""
+
 
 def anthropic_resized_size(
     width: int, height: int, max_edge: int, max_tokens: int
@@ -62,6 +75,33 @@ def image_dimensions(image: bytes) -> tuple[int, int]:
         return _jpeg_dimensions(image)
 
     raise ValueError("Unsupported screenshot image format. Expected PNG or JPEG.")
+
+
+def is_complete_image(image: bytes) -> bool:
+    """True when ``image`` is a structurally complete PNG or JPEG.
+
+    Truncation (the failure mode of a cut ``adb exec-out`` stream) leaves a
+    strict prefix of the original file, so the end-of-image marker is missing
+    near the tail. ``image_dimensions`` cannot see this: PNG dimensions live
+    in the IHDR header, and only a pixel decode fails on a truncated file.
+    """
+    if not image:
+        return False
+    if image.startswith(PNG_MAGIC):
+        return len(image) >= 24 and _PNG_IEND_CHUNK in image[-_TAIL_SCAN_BYTES:]
+    if image.startswith(_JPEG_SOI):
+        return _JPEG_EOI in image[-_TAIL_SCAN_BYTES:]
+    return False
+
+
+def ensure_complete_image(image: bytes, *, source: str = "image") -> bytes:
+    """Return ``image`` unchanged or raise :class:`IncompleteImageError`."""
+    if not is_complete_image(image):
+        raise IncompleteImageError(
+            f"{source} is not a complete PNG/JPEG ({len(image)} bytes); "
+            "the byte stream was likely truncated."
+        )
+    return image
 
 
 def fit_dimensions_to_max_side(
