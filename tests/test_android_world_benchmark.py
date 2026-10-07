@@ -251,6 +251,82 @@ def test_results_round_trip(tmp_path):
     assert loaded["B#0"].error == "boom"
 
 
+def test_write_results_merges_with_existing_tasks(tmp_path):
+    """A write keeps rows already on disk that this invocation did not produce
+    (the file accumulates; sharded runs cannot clobber each other)."""
+    path = tmp_path / "results.json"
+    bench._write_results(
+        path,
+        {"benchmark": "androidworld", "run_id": "r1"},
+        {"A#0": bench.TaskResult(task_type="A", score=1.0, run_id="r1")},
+    )
+
+    bench._write_results(
+        path,
+        {"benchmark": "androidworld", "run_id": "r2"},
+        {"B#0": bench.TaskResult(task_type="B", score=0.0, run_id="r2")},
+    )
+
+    loaded = bench._load_results(path)
+    assert set(loaded) == {"A#0", "B#0"}
+    payload = json.loads(path.read_text())
+    assert [r["run_id"] for r in payload["runs"]] == ["r1", "r2"]
+
+
+def test_write_results_keeps_the_latest_record_for_a_run(tmp_path):
+    """Repeated writes during one invocation update its runs[] entry in place."""
+    path = tmp_path / "results.json"
+    meta = {"benchmark": "androidworld", "run_id": "r1"}
+    bench._write_results(
+        path, meta, {"A#0": bench.TaskResult(task_type="A", run_id="r1")}
+    )
+    bench._write_results(
+        path,
+        meta,
+        {
+            "A#0": bench.TaskResult(task_type="A", run_id="r1"),
+            "B#0": bench.TaskResult(task_type="B", run_id="r1"),
+        },
+    )
+
+    payload = json.loads(path.read_text())
+    assert len(payload["runs"]) == 1
+    assert payload["runs"][0]["ran_count"] == 2
+
+
+def test_load_run_history_synthesizes_a_legacy_entry(tmp_path):
+    """Files written before runs[] existed still contribute one entry."""
+    path = tmp_path / "legacy.json"
+    path.write_text(
+        json.dumps(
+            {
+                "benchmark": "androidworld",
+                "server_url": "http://localhost:5000",
+                "model": "old-model",
+                "tasks": [],
+            }
+        )
+    )
+
+    history = bench._load_run_history(path)
+
+    assert len(history) == 1
+    assert history[0]["legacy"] is True
+    assert history[0]["server_url"] == "http://localhost:5000"
+    assert "tasks" not in history[0]
+
+
+def test_aggregate_times_ignore_unfinished_runs():
+    runs = [
+        {"started_at": "2026-10-07T10:00:00", "finished_at": "2026-10-07T11:00:00"},
+        {"started_at": "2026-10-07T09:00:00", "finished_at": None},
+    ]
+    assert bench._aggregate_times(runs) == {
+        "started_at": "2026-10-07T09:00:00",
+        "finished_at": "2026-10-07T11:00:00",
+    }
+
+
 # ---------------------------------------------------------------------------
 # Orchestration
 # ---------------------------------------------------------------------------
@@ -479,6 +555,82 @@ def test_gated_score_is_zero_when_agent_did_not_finish(monkeypatch, tmp_path):
     assert entry["finished"] is False
     # An episode the agent never declared done submits no answer.
     assert not any(call[0] == "execute_action" for call in client.calls)
+
+
+def test_sharded_runs_accumulate_provenance(monkeypatch, tmp_path):
+    """Two invocations writing one --output (different shards and servers, the
+    second WITHOUT --resume) must keep both tasks and record both runs."""
+    output = tmp_path / "results.json"
+
+    client1 = FakeTaskClient(tasks=("ClockStopWatchRunning",), score=1.0)
+    patch_benchmark(monkeypatch, client1, make_fake_agent_class())
+    run(
+        bench.run_androidworld_benchmark(
+            server_url="http://localhost:5000",
+            output=str(output),
+            tasks="ClockStopWatchRunning",
+        )
+    )
+
+    client2 = FakeTaskClient(tasks=("CameraTakePhoto",), score=0.0)
+    patch_benchmark(monkeypatch, client2, make_fake_agent_class())
+    run(
+        bench.run_androidworld_benchmark(
+            server_url="http://localhost:5001",
+            output=str(output),
+            tasks="CameraTakePhoto",
+            difficulty=["easy"],
+        )
+    )
+
+    data = json.loads(output.read_text())
+    # Both shards survive even though the second run did not use --resume.
+    assert [t["task_type"] for t in data["tasks"]] == [
+        "CameraTakePhoto",
+        "ClockStopWatchRunning",
+    ]
+    by_task = {t["task_type"]: t for t in data["tasks"]}
+    assert by_task["ClockStopWatchRunning"]["server_url"] == "http://localhost:5000"
+    assert by_task["CameraTakePhoto"]["server_url"] == "http://localhost:5001"
+    assert (
+        by_task["ClockStopWatchRunning"]["run_id"]
+        != by_task["CameraTakePhoto"]["run_id"]
+    )
+
+    # Both invocations are recorded, with the shard arguments that produced them.
+    assert [r["server_url"] for r in data["runs"]] == [
+        "http://localhost:5000",
+        "http://localhost:5001",
+    ]
+    second = data["runs"][1]
+    assert second["tasks_filter"] == "CameraTakePhoto"
+    assert second["difficulty"] == ["easy"]
+    assert second["resumed"] is False
+    assert second["ran_count"] == 1
+    # The file's window spans both invocations, not just the last one.
+    assert data["started_at"] == min(r["started_at"] for r in data["runs"])
+    assert data["finished_at"] == max(r["finished_at"] for r in data["runs"])
+
+
+def test_summary_is_written_without_evidence(monkeypatch, tmp_path):
+    client = FakeTaskClient(tasks=("ClockStopWatchRunning",), score=1.0)
+    patch_benchmark(monkeypatch, client, make_fake_agent_class())
+    output = tmp_path / "results.json"
+
+    run(
+        bench.run_androidworld_benchmark(
+            server_url="http://localhost:5000",
+            output=str(output),
+            tasks="ClockStopWatchRunning",
+            capture_evidence=False,
+        )
+    )
+
+    data = json.loads(output.read_text())
+    assert data["capture_evidence"] is False
+    assert data["summary"]["tasks"] == 1
+    assert "total_runtime_s" in data["summary"]
+    assert data["updated_at"]
 
 
 def test_answer_is_submitted_before_scoring(monkeypatch, tmp_path):
