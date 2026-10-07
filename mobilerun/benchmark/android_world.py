@@ -350,6 +350,9 @@ class TaskResult:
     finished: Optional[bool] = None  # agent declared completion (complete tool)
     steps: Optional[int] = None
     reason: str = ""
+    # Server-side explanation of the score (mobileworld's /task/eval returns
+    # one; androidworld's /task/score does not).
+    eval_reason: str = ""
     duration_s: Optional[float] = None
     error: Optional[str] = None
     timestamp: str = ""

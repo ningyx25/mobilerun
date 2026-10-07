@@ -912,8 +912,16 @@ class MobileAgent(Workflow):
             self.executor_agent.registry = self.registry
             self.executor_agent.action_ctx = self.action_ctx
 
-        # ── 6. Fetch device date once ─────────────────────────────────
-        self.shared_state.device_date = await driver.get_date()
+        # ── 6. Fetch device date once (best-effort) ───────────────────
+        # Not every backend can report a date (e.g. the MobileWorld server has
+        # no date endpoint); an empty value simply drops the <device_date>
+        # block from the prompt.
+        try:
+            self.shared_state.device_date = await driver.get_date()
+        except NotImplementedError:
+            logger.debug(
+                "Driver %s does not provide a device date", type(driver).__name__
+            )
 
         # ── 7. Telemetry init event ───────────────────────────────────
         capture(

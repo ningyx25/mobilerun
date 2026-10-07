@@ -1106,15 +1106,31 @@ def test_runbench_cli_passes_options(monkeypatch):
     assert captured["dry_run"] is True
 
 
-def test_runbench_cli_mobileworld_not_implemented():
+def test_runbench_cli_mobileworld_routes_to_its_runner(monkeypatch):
+    """`runbench --benchmark-name mobileworld` must dispatch to the MobileWorld
+    runner, not the androidworld one (which is covered in
+    tests/test_mobile_world_benchmark.py)."""
     from click.testing import CliRunner
 
+    called = {}
+
+    async def fake_mobileworld(**kwargs):
+        called.update(kwargs)
+        return True
+
+    async def fake_androidworld(**kwargs):  # pragma: no cover - must not run
+        raise AssertionError("mobileworld must not use the androidworld runner")
+
+    monkeypatch.setattr(cli_main, "run_mobileworld_benchmark", fake_mobileworld)
+    monkeypatch.setattr(cli_main, "run_androidworld_benchmark", fake_androidworld)
+
     result = CliRunner().invoke(
-        cli_main.cli, ["runbench", "--benchmark-name", "mobileworld"]
+        cli_main.cli,
+        ["runbench", "--benchmark-name", "mobileworld", "-d", "http://localhost:6800"],
     )
 
-    assert result.exit_code == 1
-    assert "not implemented" in result.output
+    assert result.exit_code == 0, result.output
+    assert called["server_url"] == "http://localhost:6800"
 
 
 def test_runbench_cli_help_lists_options():

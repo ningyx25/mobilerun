@@ -45,6 +45,7 @@ from mobilerun.agent.utils.oauth.openai_oauth_llm import (
 )
 from mobilerun.agent.utils.portal_setup import portal_version_kwargs
 from mobilerun.benchmark.android_world import run_androidworld_benchmark
+from mobilerun.benchmark.mobile_world import run_mobileworld_benchmark
 from mobilerun.cli.configure_wizard import (
     ConfigureWizardCallbacks,
     run_configure_wizard,
@@ -626,7 +627,8 @@ async def run(
     "--device",
     "-d",
     default=None,
-    help="AndroidWorld environment server URL (default http://localhost:5000)",
+    help="Environment server URL (androidworld default http://localhost:5000, "
+    "mobileworld default http://localhost:6800)",
 )
 @click.option("--config", "-c", "config_path", help="Path to config file", default=None)
 @click.option(
@@ -654,7 +656,8 @@ async def run(
     "--steps",
     type=int,
     default=None,
-    help="Max steps per task (default: 10 x task complexity)",
+    help="Max steps per task (androidworld default: 10 x task complexity; "
+    "mobileworld default: 50)",
 )
 @click.option(
     "--seed",
@@ -727,6 +730,21 @@ async def run(
 @click.option(
     "--dry-run", is_flag=True, default=False, help="List the selected tasks and exit"
 )
+@click.option(
+    "--enable-mcp/--no-enable-mcp",
+    default=False,
+    help="MobileWorld only: include agent-mcp tasks (default: pure-GUI tasks only)",
+)
+@click.option(
+    "--enable-user-interaction/--no-enable-user-interaction",
+    default=False,
+    help="MobileWorld only: include agent-user-interaction tasks (default: pure-GUI tasks only)",
+)
+@click.option(
+    "--device-id",
+    default=None,
+    help="MobileWorld only: device id on the server (default emulator-5554)",
+)
 @coro
 async def runbench(
     benchmark_name: str,
@@ -754,41 +772,71 @@ async def runbench(
     evidence: bool,
     verbose: bool,
     dry_run: bool,
+    enable_mcp: bool,
+    enable_user_interaction: bool,
+    device_id: str | None,
 ):
-    """Run a benchmark suite (AndroidWorld) with the mobilerun agent."""
-    if benchmark_name.lower() != "androidworld":
-        console.print(
-            "[red]Error: the 'mobileworld' benchmark is not implemented yet.[/]"
-        )
-        sys.exit(1)
-
+    """Run a benchmark suite (AndroidWorld or MobileWorld) with the mobilerun agent."""
     try:
-        success = await run_androidworld_benchmark(
-            server_url=device,
-            config_path=config_path,
-            tasks=tasks,
-            task_index_range=task_index_range,
-            difficulty=difficulty,
-            task_idx=task_idx,
-            steps=steps,
-            seed=seed,
-            n_task_combinations=n_task_combinations,
-            output=output,
-            resume=resume,
-            health_timeout=health_timeout,
-            task_timeout=task_timeout,
-            save_trajectory=save_trajectory,
-            capture_evidence=evidence,
-            telemetry=telemetry,
-            provider=provider,
-            model=model,
-            base_url=base_url,
-            api_base=api_base,
-            temperature=temperature,
-            debug=debug,
-            verbose=verbose,
-            dry_run=dry_run,
-        )
+        if benchmark_name.lower() == "mobileworld":
+            if seed is not None or n_task_combinations is not None or task_idx:
+                console.print(
+                    "[yellow]⚠️ --seed/--n-task-combinations/--task-idx do not "
+                    "apply to the mobileworld benchmark; ignoring them.[/]"
+                )
+            success = await run_mobileworld_benchmark(
+                server_url=device,
+                config_path=config_path,
+                tasks=tasks,
+                task_index_range=task_index_range,
+                difficulty=difficulty,
+                steps=steps,
+                output=output,
+                resume=resume,
+                health_timeout=health_timeout,
+                task_timeout=task_timeout,
+                enable_mcp=enable_mcp,
+                enable_user_interaction=enable_user_interaction,
+                device_id=device_id,
+                save_trajectory=save_trajectory,
+                capture_evidence=evidence,
+                telemetry=telemetry,
+                provider=provider,
+                model=model,
+                base_url=base_url,
+                api_base=api_base,
+                temperature=temperature,
+                debug=debug,
+                verbose=verbose,
+                dry_run=dry_run,
+            )
+        else:
+            success = await run_androidworld_benchmark(
+                server_url=device,
+                config_path=config_path,
+                tasks=tasks,
+                task_index_range=task_index_range,
+                difficulty=difficulty,
+                task_idx=task_idx,
+                steps=steps,
+                seed=seed,
+                n_task_combinations=n_task_combinations,
+                output=output,
+                resume=resume,
+                health_timeout=health_timeout,
+                task_timeout=task_timeout,
+                save_trajectory=save_trajectory,
+                capture_evidence=evidence,
+                telemetry=telemetry,
+                provider=provider,
+                model=model,
+                base_url=base_url,
+                api_base=api_base,
+                temperature=temperature,
+                debug=debug,
+                verbose=verbose,
+                dry_run=dry_run,
+            )
     except KeyboardInterrupt:
         console.print(
             "\n[yellow]⏹️ Benchmark interrupted; partial results were kept.[/]"
