@@ -131,12 +131,14 @@ llm_profiles:
 device:
   # Default device serial (null = auto-detect). An Android http(s):// Portal URL
   # connects over Portal HTTP without ADB (needs auth_token).
-  # For control_backend android-world, this is the environment server URL
-  # (e.g. http://localhost:5000); on the Android platform an http(s) URL here
-  # is auto-detected as the android-world backend.
+  # For control_backend android-world / mobile-world, this is the environment
+  # server URL (AndroidWorld e.g. http://localhost:5000, MobileWorld e.g.
+  # http://localhost:6800); on the Android platform an http(s) URL here is
+  # auto-detected by port (500* = android-world, 680* = mobile-world).
   serial: null
   # Optional backend override. null = platform default, visual-remote = compatible screenshot/action server,
-  # android-world = AndroidWorld docker environment server (serial = server URL)
+  # android-world = AndroidWorld docker environment server (serial = server URL),
+  # mobile-world = MobileWorld docker environment server (serial = server URL)
   control_backend: null
   # Device id for backends that expose multiple devices
   device_id: auto

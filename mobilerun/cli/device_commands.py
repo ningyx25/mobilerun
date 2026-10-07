@@ -41,6 +41,12 @@ from mobilerun.tools.driver.android_world import (
     AndroidWorldHttpDriver,
     looks_like_http_url,
 )
+from mobilerun.tools.driver.mobile_world import (
+    MOBILE_WORLD_CONNECTION,
+    MOBILE_WORLD_DEFAULT_URL,
+    MobileWorldHttpDriver,
+    looks_like_mobile_world_url,
+)
 from mobilerun.tools.filters import ConciseFilter
 from mobilerun.tools.formatters import IndexedFormatter
 from mobilerun.tools.ui.ios_provider import IOSStateProvider
@@ -191,14 +197,24 @@ async def _create_driver(
         await driver.connect()
         return driver, True
 
-    # AndroidWorld docker server: explicit control_backend, or an http(s) URL
-    # in the serial (never a valid ADB serial). An explicit backend other than
-    # android-world keeps its existing behavior.
+    # Docker environment servers: explicit control_backend, or an http(s) URL
+    # in the serial (never a valid ADB serial). android-world and mobile-world
+    # are sibling backends picked by the shared port convention (500* /
+    # 680*); any other http(s) URL defaults to android-world (unchanged).
     control_backend = (config.device.control_backend or "").strip().lower()
+    serial_url = config.device.serial
+    is_mobile_world = control_backend == MOBILE_WORLD_CONNECTION or (
+        not control_backend and looks_like_mobile_world_url(serial_url)
+    )
+    if is_mobile_world:
+        url = serial_url or MOBILE_WORLD_DEFAULT_URL
+        driver = MobileWorldHttpDriver(url=url)
+        await driver.connect()
+        return driver, False
     if control_backend == ANDROID_WORLD_CONNECTION or (
-        not control_backend and looks_like_http_url(config.device.serial)
+        not control_backend and looks_like_http_url(serial_url) and not is_mobile_world
     ):
-        url = config.device.serial or ANDROID_WORLD_DEFAULT_URL
+        url = serial_url or ANDROID_WORLD_DEFAULT_URL
         driver = AndroidWorldHttpDriver(url=url)
         await driver.connect()
         return driver, False
