@@ -76,6 +76,7 @@ from mobilerun.tools.driver.android_world import (
     ANDROID_WORLD_CONNECTION,
     looks_like_http_url,
 )
+from mobilerun.tools.driver.mobile_world import MOBILE_WORLD_CONNECTION
 
 # Suppress all warnings
 warnings.filterwarnings("ignore")
@@ -350,7 +351,8 @@ async def _cleanup_android_keyboard(config: MobileConfig) -> None:
     control_backend = (config.device.control_backend or "").lower()
     if (
         platform == "ios"
-        or control_backend in {VISUAL_REMOTE_CONNECTION, ANDROID_WORLD_CONNECTION}
+        or control_backend
+        in {VISUAL_REMOTE_CONNECTION, ANDROID_WORLD_CONNECTION, MOBILE_WORLD_CONNECTION}
         or looks_like_http_url(config.device.serial)
     ):
         return
@@ -535,12 +537,16 @@ except Exception:
 )
 @click.option(
     "--control-backend",
-    type=click.Choice([VISUAL_REMOTE_CONNECTION, ANDROID_WORLD_CONNECTION]),
+    type=click.Choice(
+        [VISUAL_REMOTE_CONNECTION, ANDROID_WORLD_CONNECTION, MOBILE_WORLD_CONNECTION]
+    ),
     default=None,
     help=(
         "Device backend instead of the platform default: 'visual-remote' "
-        "(compatible screenshot/action server) or 'android-world' "
-        "(AndroidWorld environment server; --device is its URL)."
+        "(compatible screenshot/action server), 'android-world' (AndroidWorld "
+        "environment server), or 'mobile-world' (MobileWorld environment "
+        "server). For the docker backends --device is the server URL; a bare "
+        "URL is auto-detected by port (500* = android-world, 680* = mobile-world)."
     ),
 )
 @click.option(

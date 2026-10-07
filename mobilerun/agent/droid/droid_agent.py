@@ -107,6 +107,12 @@ from mobilerun.tools.driver.android_world import (
     AndroidWorldHttpDriver,
     looks_like_http_url,
 )
+from mobilerun.tools.driver.mobile_world import (
+    MOBILE_WORLD_CONNECTION,
+    MOBILE_WORLD_DEFAULT_URL,
+    MobileWorldHttpDriver,
+    looks_like_mobile_world_url,
+)
 from mobilerun.tools.filters import ConciseFilter, DetailedFilter
 from mobilerun.tools.formatters import IndexedFormatter
 from mobilerun.tools.ui.ios_provider import IOSStateProvider
@@ -655,7 +661,11 @@ class MobileAgent(Workflow):
         control_backend = _normalize_control_backend(
             self.resolved_device_config.control_backend
         )
-        supported_backends = {VISUAL_REMOTE_CONNECTION, ANDROID_WORLD_CONNECTION}
+        supported_backends = {
+            VISUAL_REMOTE_CONNECTION,
+            ANDROID_WORLD_CONNECTION,
+            MOBILE_WORLD_CONNECTION,
+        }
         if control_backend and control_backend not in supported_backends:
             raise ValueError(
                 "Unsupported device control backend "
@@ -663,27 +673,44 @@ class MobileAgent(Workflow):
                 f"{', '.join(sorted(supported_backends))}. Omit control backend "
                 "for the platform default."
             )
-        if is_ios and control_backend == ANDROID_WORLD_CONNECTION:
-            # The android-world driver serves the Android-shaped state; the
-            # iOS state provider would not understand it, so fail loudly
-            # instead of pairing the two halves of the pipeline wrongly.
+        if is_ios and control_backend in (
+            ANDROID_WORLD_CONNECTION,
+            MOBILE_WORLD_CONNECTION,
+        ):
+            # These drivers serve the Android-shaped state; the iOS state
+            # provider would not understand it, so fail loudly instead of
+            # pairing the two halves of the pipeline wrongly.
             raise ValueError(
-                "The 'android-world' control backend drives an Android "
+                f"The '{control_backend}' control backend drives an Android "
                 "emulator server and cannot be combined with platform 'ios'."
             )
         is_visual_remote = control_backend == VISUAL_REMOTE_CONNECTION
-        # An http(s) URL in the serial is never a valid ADB serial; treat it
-        # as an AndroidWorld server URL (an explicit control_backend wins).
+        serial = self.resolved_device_config.serial
+        # An http(s) URL in the serial is never a valid ADB serial. Pick the
+        # docker environment backend by the shared port convention (500* =
+        # AndroidWorld, 680* = MobileWorld); an explicit control_backend wins,
+        # and any other http(s) URL defaults to android-world (unchanged).
+        is_mobile_world = control_backend == MOBILE_WORLD_CONNECTION or (
+            control_backend is None
+            and not is_ios
+            and looks_like_mobile_world_url(serial)
+        )
         is_android_world = control_backend == ANDROID_WORLD_CONNECTION or (
             control_backend is None
             and not is_ios
-            and looks_like_http_url(self.resolved_device_config.serial)
+            and looks_like_http_url(serial)
+            and not is_mobile_world
         )
-        if is_android_world and control_backend is None:
+        if control_backend is None and (is_android_world or is_mobile_world):
             logger.debug(
-                "Device serial %r looks like an HTTP URL; using the "
-                "android-world control backend.",
-                self.resolved_device_config.serial,
+                "Device serial %r looks like an environment server URL; using "
+                "the %s control backend.",
+                serial,
+                (
+                    MOBILE_WORLD_CONNECTION
+                    if is_mobile_world
+                    else ANDROID_WORLD_CONNECTION
+                ),
             )
 
         if self._injected_driver is not None:
@@ -695,6 +722,11 @@ class MobileAgent(Workflow):
             driver = VisualRemoteDriver(
                 url=visual_remote_url,
                 device_id=self.resolved_device_config.device_id,
+            )
+            await driver.connect()
+        elif is_mobile_world:
+            driver = MobileWorldHttpDriver(
+                url=self.resolved_device_config.serial or MOBILE_WORLD_DEFAULT_URL
             )
             await driver.connect()
         elif is_android_world:
@@ -749,6 +781,7 @@ class MobileAgent(Workflow):
             and not is_ios
             and not is_visual_remote
             and not is_android_world
+            and not is_mobile_world
         ):
             driver = StealthDriver(driver)
 

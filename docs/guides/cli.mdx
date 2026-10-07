@@ -48,7 +48,7 @@ mobilerun run "<command>" [OPTIONS]
 | `--reasoning` | Enable planning mode | `false` |
 | `--vision` | Enable vision for all agents | From config |
 | `--vision-only` | Use screenshots only, without an accessibility tree | `false` |
-| `--control-backend` | `visual-remote` (compatible screenshot/action server) or `android-world` (AndroidWorld environment server; `--device` is its URL) | Platform default |
+| `--control-backend` | `visual-remote` (compatible screenshot/action server), `android-world` (AndroidWorld environment server), or `mobile-world` (MobileWorld environment server); for the docker backends `--device` is the server URL | Platform default |
 | `--tcp` | Use TCP instead of content provider | `false` |
 | `--debug` | Verbose logging | `false` |
 | `--save-trajectory` | Save execution (`none`, `step`, `action`) | `none` |

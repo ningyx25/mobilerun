@@ -66,9 +66,22 @@ _SELECT_ALL = ["shell", "input", "keycombination", "113", "29"]
 _DELETE = ["shell", "input", "keyevent", "67"]
 
 
+# Port convention shared with the mobile-world backend: 500* = AndroidWorld
+# servers, 680* = MobileWorld servers.
+ANDROID_WORLD_PORT_PREFIX = "500"
+
+
 def looks_like_http_url(value: str | None) -> bool:
     """True when *value* is an http(s) URL (never a valid ADB serial)."""
     return bool(value and value.strip().lower().startswith(("http://", "https://")))
+
+
+def looks_like_android_world_url(value: str | None) -> bool:
+    """True for an http(s) URL on a 500* port (an AndroidWorld server)."""
+    if not looks_like_http_url(value):
+        return False
+    port = urlparse(value.strip()).port
+    return port is not None and str(port).startswith(ANDROID_WORLD_PORT_PREFIX)
 
 
 def validate_android_world_url(url: str) -> str:
