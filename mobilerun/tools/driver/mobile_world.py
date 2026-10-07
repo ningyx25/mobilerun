@@ -374,6 +374,15 @@ class MobileWorldHttpDriver(DeviceDriver):
             )
         await self.press_button(button)
 
+    async def submit_answer(self, text: str) -> None:
+        """Submit an answer into the server's interaction_cache.
+
+        Answer-style tasks grade purely from this value (set by the ``answer``
+        action), so a benchmark must submit before scoring. Not part of the
+        DeviceDriver verb set -- it is a scoring-side action on /step.
+        """
+        await self._step("answer", text=str(text))
+
     # -- app management ----------------------------------------------------
 
     async def start_app(self, package: str, activity: Optional[str] = None) -> str:

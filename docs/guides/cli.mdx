@@ -240,31 +240,39 @@ device secrets and does not configure LLM provider authentication.
 
   <Tab title="Benchmark">
 
-Run the AndroidWorld benchmark suite (116 tasks) against an AndroidWorld
-environment server with the mobilerun agent.
+Run a benchmark suite with the mobilerun agent against a docker environment
+server:
 
-Prerequisite: an AndroidWorld environment server is running, e.g. the docker
-container from the [android_world](https://github.com/google-research/android_world)
-repo (`docker build -t android_world:latest . && ./scripts/run_container.sh 5000`;
-a cold container needs 5-10 minutes to boot the emulator).
+- **androidworld** — the 116 AndroidWorld tasks
+  ([android_world](https://github.com/google-research/android_world);
+  `docker build -t android_world:latest . && ./scripts/run_container.sh 5000`).
+- **mobileworld** — the 117 pure-GUI MobileWorld tasks (of 201; tasks tagged
+  `agent-mcp` / `agent-user-interaction` are excluded unless
+  `--enable-mcp` / `--enable-user-interaction` is passed, and need subsystems
+  mobilerun does not provide yet).
+
+A cold container needs 5-10 minutes to boot the emulator.
 
 ### Usage
 
 ```bash
 mobilerun runbench --benchmark-name androidworld [OPTIONS]
+mobilerun runbench --benchmark-name mobileworld [OPTIONS]
 ```
 
 ### Common Flags
 
 | Flag | Description | Default |
 |------|-------------|---------|
-| `--benchmark-name` | Benchmark to run (`androidworld`) | Required |
-| `--device`, `-d` | AndroidWorld server URL | `http://localhost:5000` |
-| `--tasks` | Comma-separated task names to run | All 116 tasks |
+| `--benchmark-name` | Benchmark to run (`androidworld` or `mobileworld`) | Required |
+| `--device`, `-d` | Environment server URL | `http://localhost:5000` / `http://localhost:6800` |
+| `--tasks` | Comma-separated task names to run | All (116 / 117) |
 | `--task-index-range` | 1-based `START-END` range over the task list (e.g. `59-116`) | All |
-| `--difficulty` | Only run `easy`, `medium` and/or `hard` tasks | All |
-| `--steps` | Max steps per task | `10 x task complexity` |
-| `--output`, `-o` | Results JSON path | `runs/androidworld_<timestamp>.json` |
+| `--difficulty` | Only run `easy`, `medium` and/or `hard` tasks (androidworld only) | All |
+| `--steps` | Max steps per task | `10 x task complexity` / `50` |
+| `--enable-mcp` / `--enable-user-interaction` | mobileworld: include those task groups | `false` |
+| `--device-id` | mobileworld: device id on the server | `emulator-5554` |
+| `--output`, `-o` | Results JSON path | `runs/<benchmark>_<timestamp>.json` |
 | `--evidence` / `--no-evidence` | Record a rich per-episode evidence bundle | `true` |
 | `--resume` | Skip tasks already recorded in the output file | `false` |
 | `--dry-run` | List the selected tasks and exit | `false` |
@@ -281,6 +289,10 @@ mobilerun runbench --benchmark-name androidworld -d http://localhost:5000 \
 # Run the first half of the suite, resuming from an earlier run
 mobilerun runbench --benchmark-name androidworld -d http://localhost:5000 \
     --task-index-range 1-58 -o runs/aw_half1.json --resume
+
+# MobileWorld: run a pure-GUI task against the docker server
+mobilerun runbench --benchmark-name mobileworld -d http://localhost:6800 \
+    --tasks SumFileLinesTask -o runs/mw.json
 ```
 
 Results are recorded per task (server score plus an AndroidWorld-style gated
