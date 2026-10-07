@@ -28,12 +28,14 @@ import difflib
 import json
 import logging
 import time
+import uuid
 from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
 import httpx
+from filelock import FileLock
 from rich.console import Console
 from rich.table import Table
 
@@ -70,6 +72,10 @@ _STABILIZE_TIMEOUT = 120.0
 # Second-chance score read for a completed-but-scored-0 episode, after the
 # final screen has had another beat to settle.
 _SCORE_RECHECK_DELAY_S = 1.0
+
+# Results files accumulate across sharded / resumed / concurrent invocations,
+# so every write is a locked read-merge-write.
+_RESULTS_LOCK_TIMEOUT_S = 30.0
 
 # Idempotent calls retry on transient server flakiness (same policy as the
 # reference client); connection errors retry for every call.
@@ -347,6 +353,10 @@ class TaskResult:
     duration_s: Optional[float] = None
     error: Optional[str] = None
     timestamp: str = ""
+    # -- provenance: which invocation produced this row (a results file can
+    # accumulate rows from several sharded / resumed runs) --
+    run_id: str = ""
+    server_url: str = ""
     # -- evidence (all optional; populated when evidence_dir is enabled) --
     complexity: Optional[float] = None
     start_on_home_screen: Optional[bool] = None
@@ -440,21 +450,167 @@ def _select_tasks(
 # ---------------------------------------------------------------------------
 
 
+def _read_results_payload(path: Path) -> Dict[str, Any]:
+    """Raw payload of an existing results file, or {} if unreadable/absent."""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _build_summary(results: Dict[str, TaskResult]) -> Dict[str, Any]:
+    """Aggregate metrics over every recorded task."""
+    tasks = list(results.values())
+    scored = [r for r in tasks if r.score is not None]
+    scored_finished = [r for r in scored if r.finished]
+    usage: Dict[str, int] = {}
+    for result in tasks:
+        for key, value in (result.usage_totals or {}).items():
+            usage[key] = usage.get(key, 0) + int(value or 0)
+    return {
+        "tasks": len(tasks),
+        "scored": len(scored),
+        "errors": sum(1 for r in tasks if r.error is not None),
+        "mean_score": (sum(r.score for r in scored) / len(scored)) if scored else 0.0,
+        "mean_gated_score": (
+            (sum(r.gated_score or 0.0 for r in scored) / len(scored)) if scored else 0.0
+        ),
+        "completion_rate": (len(scored_finished) / len(scored)) if scored else 0.0,
+        # Sum of episode durations: unlike wall clock it is unaffected by
+        # --resume, so it describes the whole file (matches the reference
+        # runner's total_runtime_s).
+        "total_runtime_s": sum(r.duration_s or 0.0 for r in tasks),
+        "total_tokens": usage.get("total_tokens", 0),
+        "total_requests": usage.get("requests", 0),
+    }
+
+
+# Keys that describe the *file* rather than a single invocation; excluded from
+# the per-run record in ``runs[]``.
+_FILE_LEVEL_META_KEYS = frozenset({"runs", "summary", "tasks"})
+
+
+def _run_record(
+    run_meta: Dict[str, Any], results: Dict[str, TaskResult]
+) -> Dict[str, Any]:
+    """One ``runs[]`` entry: what this invocation was and what it produced."""
+    record = {k: v for k, v in run_meta.items() if k not in _FILE_LEVEL_META_KEYS}
+    run_id = record.get("run_id")
+    record["ran_count"] = sum(1 for r in results.values() if r.run_id == run_id)
+    return record
+
+
+def _runs_from_payload(data: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Invocation history recorded in a results payload.
+
+    Files written before ``runs[]`` existed have only the top-level metadata
+    of whichever invocation wrote last; synthesize one legacy entry from it so
+    that origin is not lost when the file is next merged.
+    """
+    runs = data.get("runs")
+    if isinstance(runs, list) and runs:
+        return [r for r in runs if isinstance(r, dict)]
+    if not data:
+        return []
+    legacy = {
+        k: v
+        for k, v in data.items()
+        if k not in _FILE_LEVEL_META_KEYS and k != "updated_at"
+    }
+    legacy.setdefault("run_id", "")
+    legacy["legacy"] = True
+    return [legacy]
+
+
+def _load_run_history(path: Path) -> List[Dict[str, Any]]:
+    """Invocation history of an existing results file ([] when absent)."""
+    return _runs_from_payload(_read_results_payload(path))
+
+
+def _merge_runs(
+    prior_runs: List[Dict[str, Any]], current: Dict[str, Any]
+) -> List[Dict[str, Any]]:
+    """Keep every prior invocation exactly once, current last and up to date.
+
+    Earlier entries win over later duplicates so a prior run's own final write
+    is not clobbered by a stale snapshot; the current run is always replaced by
+    the caller's (newest) copy.
+    """
+    run_id = current.get("run_id")
+    merged: List[Dict[str, Any]] = []
+    seen: set = set()
+    for record in prior_runs:
+        record_id = record.get("run_id")
+        if run_id is not None and record_id == run_id:
+            continue  # re-appended below with the latest state
+        if record_id and record_id in seen:
+            continue
+        if record_id:
+            seen.add(record_id)
+        merged.append(record)
+    merged.append(current)
+    return merged
+
+
+def _aggregate_times(runs: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """File-level start/finish across every invocation in ``runs``."""
+    starts = [r.get("started_at") for r in runs if r.get("started_at")]
+    finishes = [r.get("finished_at") for r in runs if r.get("finished_at")]
+    return {
+        "started_at": min(starts) if starts else None,
+        # Only truly finished runs count, so an incremental write mid-run
+        # cannot move the file's end time forward.
+        "finished_at": max(finishes) if finishes else None,
+    }
+
+
 def _write_results(
-    path: Path, run_meta: Dict[str, Any], results: Dict[str, TaskResult]
+    path: Path,
+    run_meta: Dict[str, Any],
+    results: Dict[str, TaskResult],
+    runs: Optional[List[Dict[str, Any]]] = None,
 ) -> None:
-    payload = dict(run_meta)
-    payload["tasks"] = [
-        asdict(result)
-        for result in sorted(results.values(), key=lambda r: (r.task_type, r.task_idx))
-    ]
-    temp = path.with_suffix(path.suffix + ".tmp")
-    temp.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
-    temp.replace(path)
+    """Merge-write the results file under a lock.
+
+    The file accumulates: tasks on disk that this invocation did not produce
+    are preserved (so sharded / concurrent runs cannot clobber each other),
+    and the invocation history in ``runs[]`` keeps every run that contributed.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with FileLock(str(path) + ".lock", timeout=_RESULTS_LOCK_TIMEOUT_S):
+        disk = _read_results_payload(path)
+        merged_results: Dict[str, TaskResult] = {}
+        names = {f.name for f in fields(TaskResult)}
+        for entry in disk.get("tasks", []) or []:
+            if isinstance(entry, dict):
+                row = TaskResult(**{k: v for k, v in entry.items() if k in names})
+                merged_results[row.key] = row
+        merged_results.update(results)  # this invocation's rows win
+
+        # Disk history first so a prior invocation's own final write wins over
+        # our (possibly stale) snapshot; the current run is appended last.
+        merged_runs = _merge_runs(
+            [*_runs_from_payload(disk), *(runs or [])],
+            _run_record(run_meta, merged_results),
+        )
+
+        payload = dict(run_meta)
+        payload.update(_aggregate_times(merged_runs))
+        payload["updated_at"] = datetime.now().isoformat(timespec="seconds")
+        payload["runs"] = merged_runs
+        payload["summary"] = _build_summary(merged_results)
+        payload["tasks"] = [
+            asdict(result)
+            for result in sorted(
+                merged_results.values(), key=lambda r: (r.task_type, r.task_idx)
+            )
+        ]
+        _write_json(path, payload)
 
 
 def _load_results(path: Path) -> Dict[str, TaskResult]:
-    data = json.loads(path.read_text(encoding="utf-8"))
+    data = _read_results_payload(path)
     names = {field.name for field in fields(TaskResult)}
     results: Dict[str, TaskResult] = {}
     for entry in data.get("tasks", []):
@@ -465,11 +621,11 @@ def _load_results(path: Path) -> Dict[str, TaskResult]:
 
 def _load_run_meta(path: Path) -> Dict[str, Any]:
     """Run-level metadata from an existing results file (for resume checks)."""
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        return {}
-    return {k: v for k, v in data.items() if k != "tasks"}
+    return {
+        k: v
+        for k, v in _read_results_payload(path).items()
+        if k not in ("tasks", "runs", "summary")
+    }
 
 
 def _sanitize_name(value: str) -> str:
@@ -498,33 +654,9 @@ async def _submit_episode_answer(
         logger.warning("Submitting the episode answer failed: %s", exc)
 
 
-def _write_run_manifest(
-    path: Path, run_meta: Dict[str, Any], results: Dict[str, TaskResult]
-) -> None:
-    """Human-readable run document: metadata + every task + summary + usage."""
-    tasks = sorted(results.values(), key=lambda r: (r.task_type, r.task_idx))
-    scored = [r for r in tasks if r.score is not None]
-    scored_finished = [r for r in scored if r.finished]
-    usage: Dict[str, int] = {}
-    for result in tasks:
-        for key, value in (result.usage_totals or {}).items():
-            usage[key] = usage.get(key, 0) + int(value or 0)
-    summary = {
-        "tasks": len(tasks),
-        "scored": len(scored),
-        "errors": sum(1 for r in tasks if r.error is not None),
-        "mean_score": (sum(r.score for r in scored) / len(scored)) if scored else 0.0,
-        "mean_gated_score": (
-            (sum(r.gated_score or 0.0 for r in scored) / len(scored)) if scored else 0.0
-        ),
-        "completion_rate": (len(scored_finished) / len(scored)) if scored else 0.0,
-        "total_tokens": usage.get("total_tokens", 0),
-        "total_requests": usage.get("requests", 0),
-    }
-    payload = dict(run_meta)
-    payload["summary"] = summary
-    payload["tasks"] = [asdict(result) for result in tasks]
-    _write_json(path, payload)
+def _new_run_id() -> str:
+    """Identifier for one invocation of the benchmark runner."""
+    return f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:4]}"
 
 
 def _write_json(path: Path, payload: Any) -> None:
@@ -543,6 +675,7 @@ def _finalize_episode_evidence(
     agent: Optional[MobileAgent],
     ui_tree_before: Optional[Dict[str, Any]],
     ui_tree_after: Optional[Dict[str, Any]],
+    run_context: Optional[Dict[str, Any]] = None,
 ) -> None:
     """Write every remaining artifact for a finished episode (best-effort)."""
     try:
@@ -568,7 +701,12 @@ def _finalize_episode_evidence(
         result.timeline_path = evidence.write_timeline()
         result.usage_totals = dict(evidence.usage_totals)
         result.evidence_dir = str(evidence.dir)
-        evidence.write_manifest(asdict(result))
+        # The run block links this episode back to the invocation (and thus
+        # the shard / server / model) that produced it.
+        manifest = asdict(result)
+        if run_context is not None:
+            manifest["run"] = run_context
+        evidence.write_manifest(manifest)
     except Exception as exc:  # noqa: BLE001 - evidence must never fail a run
         logger.warning("Episode evidence finalize failed: %s", exc)
 
@@ -604,7 +742,7 @@ def _setup_benchmark_logging(debug: bool, verbose: bool) -> None:
         logging.getLogger("mobilerun").setLevel(logging.ERROR)
 
 
-def _print_summary(results: List[TaskResult], duration: float) -> None:
+def _print_summary(results: List[TaskResult]) -> None:
     completed = [result for result in results if result.error is None]
     scored = [result for result in completed if result.score is not None]
     errors = [result for result in results if result.error is not None]
@@ -629,7 +767,10 @@ def _print_summary(results: List[TaskResult], duration: float) -> None:
             "Completion rate",
             f"{len(finished) / len(scored):.1%} ({len(finished)}/{len(scored)})",
         )
-    table.add_row("Total runtime", f"{duration:.1f}s")
+    # Sum of episode durations rather than this invocation's wall clock, so
+    # the number also holds for sharded / resumed runs.
+    total_runtime_s = sum(result.duration_s or 0.0 for result in results)
+    table.add_row("Total runtime", f"{total_runtime_s:.1f}s")
     console.print(table)
 
     by_difficulty: Dict[str, List[TaskResult]] = {}
@@ -751,9 +892,10 @@ async def run_androidworld_benchmark(
     client = AndroidWorldTaskClient(server_url)
     driver: Optional[AndroidWorldHttpDriver] = None
     fatal_error = False
-    started = time.monotonic()
+    run_id = _new_run_id()
     run_meta: Dict[str, Any] = {
         "benchmark": _BENCHMARK_NAME,
+        "run_id": run_id,
         "server_url": server_url,
         "agent": config.agent.name,
         "reasoning": config.agent.reasoning,
@@ -761,13 +903,24 @@ async def run_androidworld_benchmark(
         "model": model,
         "started_at": datetime.now().isoformat(timespec="seconds"),
         "finished_at": None,
+        "updated_at": None,
         "task_idx": task_idx,
         "seed": seed,
         "n_task_combinations": n_task_combinations,
+        # Which slice of the suite this invocation was asked to cover; without
+        # these the file cannot say how a sharded run was produced. (Named
+        # ``tasks_filter`` because top-level ``tasks`` holds the task rows.)
+        "task_index_range": task_index_range,
+        "tasks_filter": tasks,
+        "difficulty": list(difficulty),
+        "resumed": resume,
         "results_path": str(output_path),
         "capture_evidence": capture_evidence,
         "evidence_root": str(evidence_root) if capture_evidence else None,
     }
+    # The results file accumulates across sharded / resumed invocations; the
+    # history of those invocations is merged back in on every write.
+    run_history = _load_run_history(output_path) if output_path.exists() else []
 
     try:
         console.print(
@@ -807,6 +960,27 @@ async def run_androidworld_benchmark(
         except ValueError as exc:
             console.print(f"[red]Error: {exc}[/]")
             return False
+
+        run_meta["selected_count"] = len(selected)
+        # Run-level provenance embedded in each episode's evidence manifest so
+        # results and evidence can be cross-checked in both directions.
+        run_context = {
+            key: run_meta.get(key)
+            for key in (
+                "run_id",
+                "benchmark",
+                "server_url",
+                "agent",
+                "provider",
+                "model",
+                "seed",
+                "task_idx",
+                "task_index_range",
+                "tasks_filter",
+                "difficulty",
+                "started_at",
+            )
+        }
 
         if task_idx < 0 or task_idx >= await client.task_length(selected[0]):
             console.print(
@@ -905,6 +1079,8 @@ async def run_androidworld_benchmark(
                 task_idx=task_idx,
                 difficulty=metadata.get(task_type, {}).get("difficulty", ""),
                 timestamp=datetime.now().isoformat(timespec="seconds"),
+                run_id=run_id,
+                server_url=server_url,
             )
             task_started = time.monotonic()
             initialized = False
@@ -1030,10 +1206,9 @@ async def run_androidworld_benchmark(
                     if not await client.wait_healthy(health_timeout):
                         result.duration_s = time.monotonic() - task_started
                         results[key] = result
-                        run_meta["finished_at"] = datetime.now().isoformat(
-                            timespec="seconds"
-                        )
-                        _write_results(output_path, run_meta, results)
+                        # Aborted: finished_at stays unset so the file's
+                        # aggregate end time is not moved by a failed run.
+                        _write_results(output_path, run_meta, results, run_history)
                         console.print(
                             "[red]Server did not recover; aborting the run.[/]"
                         )
@@ -1054,12 +1229,19 @@ async def run_androidworld_benchmark(
                         )
                 if evidence is not None:
                     _finalize_episode_evidence(
-                        evidence, result, agent, ui_tree_before, ui_tree_after
+                        evidence,
+                        result,
+                        agent,
+                        ui_tree_before,
+                        ui_tree_after,
+                        run_context,
                     )
 
             results[key] = result
-            run_meta["finished_at"] = datetime.now().isoformat(timespec="seconds")
-            _write_results(output_path, run_meta, results)
+            # Incremental write: no finished_at here -- only a truly finished
+            # invocation sets it, so a mid-run write cannot claim the file is
+            # done (updated_at records the write itself).
+            _write_results(output_path, run_meta, results, run_history)
 
             status = "green" if (result.gated_score or 0.0) > 0.5 else "red"
             if result.error is not None:
@@ -1075,11 +1257,12 @@ async def run_androidworld_benchmark(
                     f"({result.duration_s:.1f}s)[/]"
                 )
 
+        # Only a completed invocation stamps finished_at; the file's end time
+        # is the latest finished run across every invocation in runs[].
         run_meta["finished_at"] = datetime.now().isoformat(timespec="seconds")
-        _write_results(output_path, run_meta, results)
+        _write_results(output_path, run_meta, results, run_history)
         console.print(f"💾 Results written to [cyan]{output_path}[/]")
         if capture_evidence:
-            _write_run_manifest(output_path, run_meta, results)
             console.print(f"🗂️  Evidence written to [cyan]{evidence_root}[/]")
 
         ordered = [
@@ -1087,7 +1270,7 @@ async def run_androidworld_benchmark(
             for name in selected
             if f"{name}#{task_idx}" in results
         ]
-        _print_summary(ordered, time.monotonic() - started)
+        _print_summary(ordered)
         return not fatal_error
     except asyncio.CancelledError:
         # Ctrl-C: per-task results were already written incrementally.
