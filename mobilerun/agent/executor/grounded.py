@@ -84,9 +84,10 @@ _COORDINATE_OPERATIONS = frozenset({"TAP", "LONG_PRESS"})
 
 # Every operation this executor can execute. Anything else the operation model
 # answers is refused as one step of feedback (the menu never offers it). WAIT
-# is not here: the menu does not offer it, and a stray answer is refused.
+# and ENTER are not here either: the menu does not offer them, and a stray
+# answer is refused.
 _EXECUTABLE_OPERATIONS = frozenset(
-    {"TAP", "LONG_PRESS", "SWIPE", "BACK", "HOME", "ENTER", "OPEN_APP", "TYPE_TEXT"}
+    {"TAP", "LONG_PRESS", "SWIPE", "BACK", "HOME", "OPEN_APP", "TYPE_TEXT"}
 )
 
 _SCROLL_DURATION_S = 1.0
@@ -696,7 +697,7 @@ class GroundedExecutorAgent(Workflow):
                 "coordinate2": list(end),
                 "duration": _SCROLL_DURATION_S,
             }
-        if operation in ("BACK", "HOME", "ENTER"):
+        if operation in ("BACK", "HOME"):
             return {"action": "system_button", "button": operation.lower()}
         if operation == "OPEN_APP":
             target = ev.app_target or ""
@@ -725,7 +726,7 @@ class GroundedExecutorAgent(Workflow):
             return action, await swipe(
                 action["coordinate"], action["coordinate2"], action["duration"], ctx=ctx
             )
-        if operation in ("BACK", "HOME", "ENTER"):
+        if operation in ("BACK", "HOME"):
             return action, await system_button(action["button"], ctx=ctx)
         if operation == "OPEN_APP":
             target = ev.app_target or ""

@@ -12,7 +12,7 @@ tap targets, the observation fingerprint) has no counterpart here.
 Wording: the decision rules, the operation descriptions and the target-question
 template are copied from ``dohnuts/src/dohnuts/mobile_jev_prompt.py`` (a
 verbatim port of ``android_world/agents/mobile_jev.py``), so the decision model
-reads the wording it was built with. Two deliberate deviations:
+reads the wording it was built with. Deliberate deviations:
 
 * ``RULES`` drops the reference's "TYPE_TEXT is offered only after input
   focus": screenshot-only offers TYPE_TEXT on every screen (the focus state
@@ -20,6 +20,9 @@ reads the wording it was built with. Two deliberate deviations:
 * The four ``SCROLL_*`` operations collapse into one ``SWIPE`` (the training
   overlay's merge); its start/end points come from
   ``oneflows/swipe_agent``.
+* ``WAIT`` and ``ENTER`` are dropped from the menu: every offered operation
+  changes the device state (a submit goes through TAP on the screen's own
+  control), and WAIT gave the model a non-committal escape hatch.
 """
 
 from __future__ import annotations
@@ -74,7 +77,6 @@ OPERATION_DESCRIPTIONS = {
     ),
     "BACK": "Navigate back one screen.",
     "HOME": "Go to the Android launcher home screen.",
-    "ENTER": "Press Enter to submit the focused input.",
 }
 
 TARGET_QUESTION_TEMPLATE = (
@@ -183,11 +185,9 @@ def operation_label(
         return canonical_json({"type": "swipe"})
     if operation == "OPEN_APP":
         return f"Open {app_name or ''}"
-    key = {"BACK": "back", "HOME": "home", "ENTER": "enter"}.get(operation)
+    key = {"BACK": "back", "HOME": "home"}.get(operation)
     if key is not None:
-        return canonical_json(
-            {"type": "key" if operation == "ENTER" else "global", "name": key}
-        )
+        return canonical_json({"type": "global", "name": key})
     return canonical_json({"operation": operation})
 
 
@@ -226,7 +226,9 @@ def build_questions(apps: Sequence[str] = ()) -> Dict[str, Dict[str, Any]]:
 
     Every offered operation changes the device state -- WAIT is deliberately
     not offered (it advances nothing, and the operation model abused it as a
-    non-committal escape whenever it was unsure which control to act on).
+    non-committal escape whenever it was unsure which control to act on), and
+    neither is ENTER (a submit goes through TAP on the screen's own control;
+    the typed text itself comes from ``oneflows/text_input_agent``).
     """
     app_criteria: Dict[str, str] = {}
     for label in list(apps)[:MAX_APPS]:
@@ -241,7 +243,6 @@ def build_questions(apps: Sequence[str] = ()) -> Dict[str, Dict[str, Any]]:
     operations[SWIPE_OPERATION] = SWIPE_DESCRIPTION
     operations["BACK"] = OPERATION_DESCRIPTIONS["BACK"]
     operations["HOME"] = OPERATION_DESCRIPTIONS["HOME"]
-    operations["ENTER"] = OPERATION_DESCRIPTIONS["ENTER"]
 
     questions: Dict[str, Dict[str, Any]] = {
         "operation": {

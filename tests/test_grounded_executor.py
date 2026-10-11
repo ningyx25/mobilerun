@@ -123,7 +123,6 @@ def test_menu_offers_the_full_operation_set():
         "SWIPE",
         "BACK",
         "HOME",
-        "ENTER",
     ]
     # The operation's arguments come from the oneflows, not from questions.
     assert list(req.questions) == ["operation", "app_target"]
@@ -142,7 +141,6 @@ def test_menu_without_apps_drops_open_app():
         "SWIPE",
         "BACK",
         "HOME",
-        "ENTER",
     ]
 
 
@@ -238,6 +236,14 @@ def test_parse_decision_maps_answers_onto_operations():
         {"answers": {"operation": {"choice": "HOP"}}}, req
     )
     assert "no execution path" in event.error
+
+    # WAIT and ENTER are not offered (nor executable): a stray answer is
+    # refused like any other unknown operation.
+    for stray in ("WAIT", "ENTER"):
+        event = agent._parse_decision(
+            {"answers": {"operation": {"choice": stray}}}, req
+        )
+        assert "no execution path" in event.error
 
     event = agent._parse_decision({"answers": {}}, req)
     assert event.error == "The operation model returned no operation."
