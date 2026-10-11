@@ -132,6 +132,9 @@ def _node_to_dict(element: ET.Element) -> Dict[str, Any]:
         "isFocused": _bool_attr(attrs.get("focused")),
         "isScrollable": _bool_attr(attrs.get("scrollable")),
         "isSelected": _bool_attr(attrs.get("selected")),
+        # uiautomator writes enabled="true|false" on every node; default True
+        # keeps a node without the attribute usable rather than disabled.
+        "isEnabled": _bool_attr(attrs.get("enabled", "true")),
         "isVisibleToUser": True,
     }
     bounds = _parse_bounds(attrs.get("bounds"))

@@ -102,9 +102,37 @@ class ManagerConfig:
 
 
 @dataclass
+class SystemOneConfig:
+    """Endpoints for the TypeSafe ``/v1/systemone`` decision models.
+
+    Used by ``ExecutorConfig.kind == "grounded"``, where the executor's actions
+    come from two local decision models behind one gateway (``kev.serve`` /
+    ``scripts/kev_gateway.py`` on the model host): ``operation_model`` picks the
+    operation (and the arguments that need no coordinates), ``grounding_model``
+    grounds coordinate-bearing operations on the raw screenshot.
+
+    Both requests carry a single image -- the current, unannotated screenshot;
+    no history frames, no resizing (``max_image_pixels`` stays 0 for exactly
+    that). History reaches the operation model as ``state.recentActions`` text.
+    """
+
+    base_url: str = "http://localhost:8020"
+    operation_model: str = "clef-flash"  # action type + non-coordinate instructions
+    grounding_model: str = "gui-actor"  # coordinates for TAP / LONG_PRESS
+    timeout_s: float = 300.0
+    # Client-side pixel cap per image; 0 (the default) sends the raw frame
+    # unscaled. Raise only if a server's sequence budget forces it.
+    max_image_pixels: int = 0
+
+
+@dataclass
 class ExecutorConfig:
     vision: bool = False
     system_prompt: str = "config/prompts/executor/system.jinja2"
+    # "llm" = the classic LLM tool-calling executor; "grounded" = the
+    # operation-model + grounding-model executor (SystemOneConfig).
+    kind: str = "llm"
+    systemone: SystemOneConfig = field(default_factory=SystemOneConfig)
 
 
 @dataclass
@@ -342,9 +370,14 @@ class MobileConfig:
         )
 
         executor_data = agent_data.get("executor", {})
-        executor_config = (
-            ExecutorConfig(**executor_data) if executor_data else ExecutorConfig()
-        )
+        if executor_data:
+            executor_data = dict(executor_data)
+            systemone_data = executor_data.pop("systemone", None) or {}
+            executor_config = ExecutorConfig(
+                **executor_data, systemone=SystemOneConfig(**systemone_data)
+            )
+        else:
+            executor_config = ExecutorConfig()
 
         app_cards_data = agent_data.get("app_cards", {})
         app_cards_config = (

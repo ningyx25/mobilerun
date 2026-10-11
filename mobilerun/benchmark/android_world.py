@@ -721,6 +721,7 @@ _RESUME_PROVENANCE_FIELDS = (
     "n_task_combinations",
     "provider",
     "model",
+    "executor_kind",
     "task_idx",
 )
 
@@ -902,6 +903,7 @@ async def run_androidworld_benchmark(
         "server_url": server_url,
         "agent": config.agent.name,
         "reasoning": config.agent.reasoning,
+        "executor_kind": config.agent.executor.kind,
         "provider": provider,
         "model": model,
         "started_at": datetime.now().isoformat(timespec="seconds"),

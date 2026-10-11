@@ -147,12 +147,28 @@ class EpisodeEvidence:
             entry["subgoal"] = getattr(event, "current_subgoal", None)
             entry["thought"] = getattr(event, "thought", None)
             entry["answer"] = getattr(event, "answer", None)
-        elif name == "ExecutorActionResultEvent":
+        elif name in ("ExecutorActionResultEvent", "GroundedActionResultEvent"):
             entry["kind"] = "executor_result"
             entry["action"] = make_serializable(getattr(event, "action", None))
             entry["success"] = getattr(event, "success", None)
             entry["error"] = getattr(event, "error", None)
             entry["summary"] = getattr(event, "summary", None)
+        elif name == "GroundedDecisionEvent":
+            entry["kind"] = "executor_decision"
+            entry["operation"] = getattr(event, "operation", None)
+            entry["app_target"] = getattr(event, "app_target", None)
+            entry["confidence"] = getattr(event, "confidence", None)
+        elif name == "GroundedResponseEvent":
+            entry["kind"] = "llm"
+            entry["operation"] = getattr(event, "operation", None)
+        elif name == "GroundedPointEvent":
+            entry["kind"] = "executor_ground"
+            entry["operation"] = getattr(event, "operation", None)
+            entry["x"] = getattr(event, "x", None)
+            entry["y"] = getattr(event, "y", None)
+            entry["swipe_start"] = make_serializable(getattr(event, "swipe_start", None))
+            entry["swipe_end"] = make_serializable(getattr(event, "swipe_end", None))
+            entry["text_value"] = getattr(event, "text_value", None)
         else:
             entry["kind"] = "event"
 

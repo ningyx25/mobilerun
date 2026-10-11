@@ -51,7 +51,7 @@ from mobilerun.agent.droid.events import (
     ResultEvent,
 )
 from mobilerun.agent.droid.state import MobileAgentState, QueuedUserMessage
-from mobilerun.agent.executor import ExecutorAgent
+from mobilerun.agent.executor import ExecutorAgent, GroundedExecutorAgent
 from mobilerun.agent.external import load_agent
 from mobilerun.agent.fast_agent import FastAgent
 from mobilerun.agent.fast_agent.events import FastAgentOutputEvent
@@ -451,6 +451,29 @@ class MobileAgent(Workflow):
         self.trajectory_writer = None
         self.macro_recorder = None
 
+        # The executor backend is a config switch: "llm" is the classic
+        # tool-calling ExecutorAgent, "grounded" is the operation-model +
+        # grounding-model executor. The grounded executor only makes sense in
+        # the Manager-driven reasoning loop.
+        executor_kind = self.config.agent.executor.kind
+        if executor_kind not in ("llm", "grounded"):
+            raise ValueError(
+                f"Unsupported executor.kind '{executor_kind}'. Supported: llm, grounded."
+            )
+        if executor_kind == "grounded" and not self.config.agent.reasoning:
+            raise ValueError(
+                "executor.kind 'grounded' requires agent.reasoning=true: the "
+                "grounded executor replaces the Manager/Executor loop's "
+                "execution phase and needs the Manager's step instructions."
+            )
+        if executor_kind == "grounded" and not self.config.agent.vision_only:
+            raise ValueError(
+                "executor.kind 'grounded' only supports vision_only=true: the "
+                "mode grounds every decision (operation, swipe points, typed "
+                "text) on the raw screenshot and reads no accessibility tree. "
+                "Non-vision_only is not supported yet."
+            )
+
         # Sub-agents are created in __init__ but wired up in start_handler
         if self._using_external_agent:
             self.manager_agent = None
@@ -475,15 +498,24 @@ class MobileAgent(Workflow):
                 tracing_config=self.config.tracing,
                 timeout=self.timeout,
             )
-            self.executor_agent = ExecutorAgent(
-                llm=self.executor_llm,
-                registry=None,
-                action_ctx=None,
-                shared_state=self.shared_state,
-                agent_config=self.config.agent,
-                prompt_resolver=self.prompt_resolver,
-                timeout=self.timeout,
-            )
+            if executor_kind == "grounded":
+                self.executor_agent = GroundedExecutorAgent(
+                    registry=None,
+                    action_ctx=None,
+                    shared_state=self.shared_state,
+                    agent_config=self.config.agent,
+                    timeout=self.timeout,
+                )
+            else:
+                self.executor_agent = ExecutorAgent(
+                    llm=self.executor_llm,
+                    registry=None,
+                    action_ctx=None,
+                    shared_state=self.shared_state,
+                    agent_config=self.config.agent,
+                    prompt_resolver=self.prompt_resolver,
+                    timeout=self.timeout,
+                )
         else:
             self.manager_agent = None
             self.executor_agent = None
@@ -954,6 +986,7 @@ class MobileAgent(Workflow):
                     "fast_agent": self.config.agent.fast_agent.vision,
                 },
                 reasoning=self.config.agent.reasoning,
+                executor_kind=self.config.agent.executor.kind,
                 enable_tracing=self.config.tracing.enabled,
                 debug=self.config.logging.debug,
                 save_trajectories=self.config.logging.save_trajectory,
