@@ -56,8 +56,7 @@ RULES = (
 OPERATION_DESCRIPTIONS = {
     "OPEN_APP": (
         "Open an installed app needed for the goal. Use this to switch apps "
-        "directly instead of navigating through the launcher. Only apps other "
-        "than the current foreground app are offered."
+        "directly instead of navigating through the launcher."
     ),
     "TAP": (
         "Tap an observed control to navigate toward the goal, open search, "
@@ -280,26 +279,27 @@ def build_request(
     goal: str,
     history: Sequence[HistoryEntry] = (),
     apps: Sequence[str] = (),
-    *,
-    foreground_package: str = "",
 ) -> Request:
     """Builds the whole request body the executor posts for one decision.
 
     Args:
       goal: The step instruction verbatim (the Manager's current subgoal).
       history: Executed decisions, most recent last.
-      apps: The device's app labels; the app currently in the foreground is
-        dropped, as the reference does ("only apps other than the current
-        foreground app are offered").
-      foreground_package: The app currently in the foreground (from the shared
-        state -- there is no observation to read it from).
+      apps: The device's app labels. The full inventory is always offered --
+        the model keeps its freedom to switch apps, and the foreground app
+        cannot be excluded (screenshot-only mode reads no package name). Apps
+        whose label appears in the goal are ordered first, but nothing is
+        filtered out; only the MAX_APPS cap can drop the tail.
 
     Raises:
       PayloadTooLargeError: If the text payload cannot be sent untruncated.
     """
-    apps = tuple(a for a in apps if a and a != foreground_package)
+    apps = tuple(a for a in apps if a)
     named = named_apps(apps, goal)
-    offered = tuple(named if named else list(apps)[:MAX_APPS])
+    # Ordering, not filtering: named apps first so the target is never lost to
+    # the cap; the rest follow (the inventory is normally under MAX_APPS).
+    ordered = tuple(named) + tuple(a for a in apps if a not in named)
+    offered = ordered[:MAX_APPS]
     questions = build_questions(offered)
     for question in questions.values():
         question["instructions"] = {"goal": goal, "rules": question["instructions"]}

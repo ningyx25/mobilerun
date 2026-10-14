@@ -92,7 +92,9 @@ _EXECUTABLE_OPERATIONS = frozenset(
 
 _SCROLL_DURATION_S = 1.0
 _GROUNDING_QUESTION_ID = "tap_target"
-_ONEFLOW_TIMEOUT_S = 60.0
+# Generous enough for the text oneflow's single retry (two sequential calls)
+# without turning a slow provider into a hard workflow timeout.
+_ONEFLOW_TIMEOUT_S = 90.0
 
 
 class GroundedExecutorAgent(Workflow):
@@ -129,6 +131,7 @@ class GroundedExecutorAgent(Workflow):
         self._screenshot_b64: Optional[str] = None  # encoded once per step
         self._ground_fraction: Optional[Tuple[float, float]] = None
         self._oneflow_usage = None  # UsageResult from this step's oneflow call
+        self._oneflow_response: str = ""  # the oneflow's raw reply (for evidence)
         self._thought: str = ""
 
         logger.debug(
@@ -149,6 +152,7 @@ class GroundedExecutorAgent(Workflow):
         self._screenshot_b64 = None
         self._ground_fraction = None
         self._oneflow_usage = None
+        self._oneflow_response = ""
         self._thought = ""
         error = ""
 
@@ -175,9 +179,15 @@ class GroundedExecutorAgent(Workflow):
     async def ground(self, ctx: Context, ev: GroundedDecisionEvent) -> GroundedPointEvent:
         """Resolve the operation's arguments (grounding model / oneflows)."""
         event = await self._ground(ev)
-        if self._oneflow_usage is not None:
+        # Emit for every operation that ran a oneflow -- including a failed
+        # resolution -- so the raw reply is always in the evidence.
+        if ev.operation in ("SWIPE", "TYPE_TEXT"):
             ctx.write_event_to_stream(
-                GroundedResponseEvent(operation=ev.operation, usage=self._oneflow_usage)
+                GroundedResponseEvent(
+                    operation=ev.operation,
+                    usage=self._oneflow_usage,
+                    response=self._oneflow_response,
+                )
             )
         ctx.write_event_to_stream(event)
         return event
@@ -216,7 +226,6 @@ class GroundedExecutorAgent(Workflow):
                 self._subgoal,
                 self._history,
                 apps,
-                foreground_package=self.shared_state.current_package_name or "",
             )
         except DeviceDisconnectedError:
             raise
@@ -335,8 +344,11 @@ class GroundedExecutorAgent(Workflow):
 
         if not isinstance(result, dict) or "error" in result:
             detail = result.get("error") if isinstance(result, dict) else result
+            if isinstance(result, dict):
+                self._oneflow_response = result.get("response") or ""
             return self._point_event(ev, error=f"Swipe resolution failed: {detail}")
         self._oneflow_usage = result.get("usage")
+        self._oneflow_response = result.get("response") or ""
         try:
             start = (float(result["start"][0]), float(result["start"][1]))
             end = (float(result["end"][0]), float(result["end"][1]))
@@ -360,7 +372,6 @@ class GroundedExecutorAgent(Workflow):
             result = await agent.run(
                 goal=self.shared_state.instruction or "",
                 subgoal=self._subgoal,
-                focused_text=self.shared_state.focused_text or "",
                 image=self._screenshot,
             )
         except DeviceDisconnectedError:
@@ -371,6 +382,9 @@ class GroundedExecutorAgent(Workflow):
             return self._point_event(ev, error=error)
 
         self._oneflow_usage = result.get("usage") if isinstance(result, dict) else None
+        self._oneflow_response = (
+            (result.get("response") if isinstance(result, dict) else "") or ""
+        )
         text = str((result or {}).get("text") if isinstance(result, dict) else result or "").strip()
         if not text:
             return self._point_event(ev, error="TYPE_TEXT without a suitable text value.")

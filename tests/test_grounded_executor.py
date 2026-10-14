@@ -111,6 +111,9 @@ def test_grounded_response_event_constructs_with_usage():
     event = GroundedResponseEvent(operation="SWIPE", usage=usage)
     assert event.usage.total_tokens == 15
     assert GroundedResponseEvent(operation="TAP", usage=None).usage is None
+    # The raw reply travels on the event so a failed resolution is diagnosable.
+    assert GroundedResponseEvent(operation="TYPE_TEXT", response="raw reply").response == "raw reply"
+    assert GroundedResponseEvent(operation="TYPE_TEXT").response == ""
 
 
 def test_menu_offers_the_full_operation_set():
@@ -144,21 +147,38 @@ def test_menu_without_apps_drops_open_app():
     ]
 
 
-def test_app_target_prefers_named_apps_and_drops_foreground():
-    # Both named apps are offered; the foreground package is never one of them.
+def test_app_target_orders_named_apps_first_without_dropping_any():
+    # Named apps are ordered first, but nothing is filtered out -- the full
+    # inventory stays offered (the foreground app is not excluded: screenshot
+    # mode reads no package name to exclude with).
     req = jev_prompt.build_request(
         "Open Kitchen Stories then Chrome",
         apps=["com.example.app", "Kitchen Stories", "Chrome", "Clock"],
-        foreground_package="com.example.app",
     )
-    assert list(req.criteria_of("app_target").values()) == ["Kitchen Stories", "Chrome"]
+    offered = list(req.criteria_of("app_target").values())
+    assert offered[:2] == ["Kitchen Stories", "Chrome"]
+    assert set(offered) == {"com.example.app", "Kitchen Stories", "Chrome", "Clock"}
 
-    # No app named: the full inventory is offered (minus the foreground app).
-    req = jev_prompt.build_request(
-        "Do the thing", apps=["com.example.app", "Clock"],
-        foreground_package="com.example.app",
-    )
-    assert list(req.criteria_of("app_target").values()) == ["Clock"]
+    # No app named: the full inventory is still offered.
+    req = jev_prompt.build_request("Do the thing", apps=["com.example.app", "Clock"])
+    assert set(req.criteria_of("app_target").values()) == {"com.example.app", "Clock"}
+
+
+def test_app_target_keeps_package_name_labels():
+    # D6 regression: with package-name labels (AndroidWorld), a human-word goal
+    # must not empty the candidate list -- every package is offered.
+    apps = ["com.flauschcode.broccoli", "org.videolan.vlc", "net.osmand"]
+    req = jev_prompt.build_request("Open the Broccoli app", apps=apps)
+    assert set(req.criteria_of("app_target").values()) == set(apps)
+
+
+def test_app_target_caps_at_max_apps_keeping_named_first():
+    apps = [f"com.example.pkg{i}" for i in range(250)]
+    apps[0] = "Chrome"  # a named match buried in the list
+    req = jev_prompt.build_request("Open Chrome", apps=apps)
+    offered = list(req.criteria_of("app_target").values())
+    assert len(offered) == jev_prompt.MAX_APPS
+    assert offered[0] == "Chrome"  # named match survives the cap
 
 
 def test_state_carries_goal_and_five_recent_actions():

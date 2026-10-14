@@ -47,6 +47,25 @@ def _usage_event(thought="think", code="<c/>", request=10, response=3):
     )
 
 
+def test_record_event_records_grounded_response(tmp_path):
+    from mobilerun.agent.executor.grounded_events import GroundedResponseEvent
+
+    ev = EpisodeEvidence(tmp_path / "ep", "MarkorMergeNotes", 0)
+    ev.record_event(
+        GroundedResponseEvent(operation="TYPE_TEXT", response="the model's raw prose")
+    )
+    entry = ev.timeline[-1]
+    assert entry["kind"] == "llm"
+    assert entry["operation"] == "TYPE_TEXT"
+    assert entry["response"] == "the model's raw prose"
+
+    # A runaway reply is truncated so the timeline stays bounded.
+    ev.record_event(GroundedResponseEvent(operation="TYPE_TEXT", response="x" * 5000))
+    long_entry = ev.timeline[-1]
+    assert len(long_entry["response"]) == 4001  # 4000 chars + the ellipsis
+    assert long_entry["response"].endswith("…")
+
+
 def test_record_event_builds_timeline_and_sums_usage(tmp_path):
     ev = EpisodeEvidence(tmp_path / "ep", "ClockStopWatchRunning", 0)
     ev.record_event(_usage_event(request=10, response=3))

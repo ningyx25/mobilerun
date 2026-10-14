@@ -63,6 +63,10 @@ _LLM_EVENT_TYPES = {
 # dedicated tree snapshots); the distilled timeline skips them.
 _SKIPPED_EVENT_TYPES = {"ScreenshotEvent", "RecordUIStateEvent", "FastAgentInputEvent"}
 
+# Cap on a recorded oneflow reply: a model can dump a whole file into its
+# answer, and the timeline must stay bounded while the failure stays readable.
+_MAX_RESPONSE_CHARS = 4000
+
 
 def _write_json(path: Path, payload: Any) -> None:
     """Atomically write *payload* as indented JSON."""
@@ -161,6 +165,12 @@ class EpisodeEvidence:
         elif name == "GroundedResponseEvent":
             entry["kind"] = "llm"
             entry["operation"] = getattr(event, "operation", None)
+            response = getattr(event, "response", None)
+            # Truncate a runaway reply (a model can dump a whole file) so the
+            # timeline stays bounded while the failure stays diagnosable.
+            if isinstance(response, str) and len(response) > _MAX_RESPONSE_CHARS:
+                response = response[:_MAX_RESPONSE_CHARS] + "…"
+            entry["response"] = response
         elif name == "GroundedPointEvent":
             entry["kind"] = "executor_ground"
             entry["operation"] = getattr(event, "operation", None)

@@ -65,9 +65,15 @@ class SwipeAgent(Workflow):
         if not image:
             return StopEvent(result={"error": "no screenshot to ground on"})
 
-        points, usage = await self._choose_points(goal, subgoal, image)
+        points, usage, response_text = await self._choose_points(goal, subgoal, image)
         if points is None:
-            return StopEvent(result={"error": "the model did not return a usable swipe"})
+            return StopEvent(
+                result={
+                    "error": "the model did not return a usable swipe",
+                    "usage": usage,
+                    "response": response_text,
+                }
+            )
         start, end = points
         start_f = (start[0] / _NORMALIZED_MAX, start[1] / _NORMALIZED_MAX)
         end_f = (end[0] / _NORMALIZED_MAX, end[1] / _NORMALIZED_MAX)
@@ -78,7 +84,12 @@ class SwipeAgent(Workflow):
             extra={"color": "blue"},
         )
         return StopEvent(
-            result={"start": list(start_f), "end": list(end_f), "usage": usage}
+            result={
+                "start": list(start_f),
+                "end": list(end_f),
+                "usage": usage,
+                "response": response_text,
+            }
         )
 
     async def _choose_points(
@@ -86,10 +97,15 @@ class SwipeAgent(Workflow):
         goal: str,
         subgoal: str,
         image: Optional[bytes] = None,
-    ) -> Tuple[Optional[Tuple[Tuple[float, float], Tuple[float, float]]], Optional[UsageResult]]:
-        """The (start, end) normalized points the LLM picks and its token usage,
-        or (None, usage) when the call fails or the answer is unusable -- a
-        failed swipe stays a failed step instead of a blind gesture."""
+    ) -> Tuple[
+        Optional[Tuple[Tuple[float, float], Tuple[float, float]]],
+        Optional[UsageResult],
+        str,
+    ]:
+        """The (start, end) normalized points the LLM picks, its token usage and
+        the raw reply, or (None, usage, raw) when the call fails or the answer
+        is unusable -- a failed swipe stays a failed step instead of a blind
+        gesture. The raw reply is carried so the executor can record it."""
         prompt = f"""Given one step of a mobile automation task and a screenshot of the current screen, determine the swipe gesture that advances the step.
 
 Task Goal: {goal or "(not provided)"}
@@ -110,11 +126,11 @@ To reveal content further down the screen, move the finger up (start near the bo
             )
         except Exception as exc:  # noqa: BLE001 - a failure is feedback, not a guess
             logger.warning(f"SwipeAgent LLM call failed: {exc}")
-            return None, None
+            return None, None, ""
         parsed = self._parse_points(response_text)
         if parsed is None:
             logger.warning("SwipeAgent answer unusable")
-        return parsed, usage
+        return parsed, usage, response_text
 
     @staticmethod
     def _parse_points(

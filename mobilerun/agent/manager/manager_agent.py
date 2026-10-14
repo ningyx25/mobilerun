@@ -440,10 +440,12 @@ class ManagerAgent(Workflow):
         self.shared_state.a11y_tree = ui_state.elements
         self.shared_state.phone_state = ui_state.phone_state
 
-        # Update package/activity tracking
+        # Update package/activity tracking. An absent key (e.g. the
+        # screenshot-only provider) leaves "" -- never a synthetic "Unknown",
+        # which is truthy and would be mistaken for a real foreground package.
         self.shared_state.update_current_app(
-            package_name=ui_state.phone_state.get("packageName", "Unknown"),
-            activity_name=ui_state.phone_state.get("currentApp", "Unknown"),
+            package_name=ui_state.phone_state.get("packageName", ""),
+            activity_name=ui_state.phone_state.get("currentApp", ""),
         )
 
         # Stream UI state for trajectory

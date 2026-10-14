@@ -298,10 +298,11 @@ class FastAgent(Workflow):
             self.shared_state.a11y_tree = ui_state.elements
             self.shared_state.phone_state = ui_state.phone_state
 
-            # Extract and store package/app name
+            # Extract and store package/app name. An absent key leaves ""
+            # (never a truthy "Unknown" sentinel).
             self.shared_state.update_current_app(
-                package_name=ui_state.phone_state.get("packageName", "Unknown"),
-                activity_name=ui_state.phone_state.get("currentApp", "Unknown"),
+                package_name=ui_state.phone_state.get("packageName", ""),
+                activity_name=ui_state.phone_state.get("currentApp", ""),
             )
 
             # Stream formatted state for trajectory

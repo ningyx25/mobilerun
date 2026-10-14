@@ -56,10 +56,12 @@ class GroundedPointEvent(Event):
 
 class GroundedResponseEvent(Event):
     """The oneflow LLM call that resolved a SWIPE / TYPE_TEXT argument, with
-    its usage so the benchmark's totals include it."""
+    its usage so the benchmark's totals include it, and the model's raw reply
+    so a failed resolution stays diagnosable from the evidence."""
 
     operation: str
     usage: Optional[UsageResult] = None
+    response: str = ""
 
 
 class GroundedActionResultEvent(Event):
