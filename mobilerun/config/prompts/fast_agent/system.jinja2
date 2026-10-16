@@ -18,6 +18,7 @@ To call a tool, wrap it in <function_calls> tags:
 </invoke>
 </function_calls>
 
+The <function_calls> tag always starts a tool call. Write tool-call tags only inside the call, never in your explanation.
 Multiple <invoke> blocks in one <function_calls> block are executed sequentially, in order.
 Emit exactly one <function_calls> block per response. If you need multiple actions, put multiple <invoke> blocks inside that single block.
 Do not repeat the same tool call in one response unless the user explicitly asks for repeated identical actions.
@@ -72,6 +73,8 @@ I can see the note with the meeting details: Team standup at 9:00 AM in Room 204
 </invoke>
 </function_calls>
 
+After receiving the result, continue reasoning and acting:
+
 Now I'll open Calendar and create the event. From my memory I know it's 9:00 AM, Room 204.
 
 <function_calls>
@@ -80,6 +83,8 @@ Now I'll open Calendar and create the event. From my memory I know it's 9:00 AM,
 </invoke>
 </function_calls>
 
+After receiving the result:
+
 Calendar is open. I'll tap the + button at index 2 to create a new event.
 
 <function_calls>
@@ -87,6 +92,8 @@ Calendar is open. I'll tap the + button at index 2 to create a new event.
 <parameter name="index">2</parameter>
 </invoke>
 </function_calls>
+
+After receiving the result:
 
 Event form is open. I'll type the title and tap the time field. Both are on the same form.
 
@@ -140,7 +147,7 @@ When done:
 - Prefer one tool call per response so you can observe the result before acting again
 {% endif %}
 - Use `complete` to signal task completion (success or failure)
-- **Before navigating away from a screen that contains data you need later** (names, numbers, dates, settings values, list items), save it using `<add_memory>` tags. Write plain text, not JSON. Your memory is shown to you each step in the `<memory>` block. Only record NEW facts — if nothing new is worth remembering, omit the tag.
+- **Before navigating away from a screen that contains data you need later** (names, numbers, dates, settings values, list items), save it using `<add_memory>` tags, written before the `<function_calls>` block, never inside it. Write plain text, not JSON. Your memory is shown to you each step in the `<memory>` block. Only record NEW facts — if nothing new is worth remembering, omit the tag.
 - Messages in `<external_user_message>` tags are live corrections or new instructions from the user sent mid-execution. They override earlier assumptions — honor the most recent user guidance on your next step
 
 {% if output_schema %}

@@ -59,6 +59,7 @@ from mobilerun.agent.manager import ManagerAgent, StatelessManagerAgent
 from mobilerun.agent.manager.prompts import ManagerResponseValidationError
 from mobilerun.agent.oneflows.structured_output_agent import StructuredOutputAgent
 from mobilerun.agent.trajectory import TrajectoryWriter
+from mobilerun.agent.utils.android_device import resolve_android_serial
 from mobilerun.agent.utils.errors import describe_error
 from mobilerun.agent.utils.llm_loader import (
     load_agent_llms,
@@ -376,6 +377,8 @@ class MobileAgent(Workflow):
         self._injected_driver = driver
         self._injected_state_provider = state_provider
         self.driver = None
+        # Android serial resolved for this run.
+        self.android_serial = None
         self.registry = None
         self.action_ctx = None
         self.state_provider = None
@@ -567,12 +570,11 @@ class MobileAgent(Workflow):
             # Resolve device serial and get raw AdbDevice
             device_serial = self.resolved_device_config.serial
             if device_serial is None:
-                devices = await adb.list()
-                if not devices:
-                    raise ValueError("No connected Android devices found.")
-                device_serial = devices[0].serial
+                device_serial = await resolve_android_serial()
+                logger.info(f"📱 Using device: {device_serial}")
 
             adb_device = await adb.device(serial=device_serial)
+            self.android_serial = device_serial
 
             logger.info(f"🤖 Using external agent: {agent_name}")
 
@@ -746,10 +748,10 @@ class MobileAgent(Workflow):
         else:
             device_serial = self.resolved_device_config.serial
             if device_serial is None:
-                devices = await adb.list()
-                if not devices:
-                    raise ValueError("No connected Android devices found.")
-                device_serial = devices[0].serial
+                device_serial = await resolve_android_serial()
+                logger.info(f"📱 Using device: {device_serial}")
+
+            self.android_serial = device_serial
 
             # Auto-setup portal if enabled
             if (

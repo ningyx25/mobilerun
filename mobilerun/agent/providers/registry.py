@@ -81,6 +81,7 @@ GEMINI_OAUTH_RETIRED_MODELS = frozenset(
 )
 GEMINI_API_MODELS: tuple[str, ...] = (
     GEMINI_API_DEFAULT_MODEL,
+    "gemini-4-argon",
     "gemini-3.7-flash",
     "gemini-3.5-flash-lite",
     "gemini-3.1-pro-preview",
@@ -95,10 +96,12 @@ GEMINI_UNSUPPORTED_SAMPLING_PARAMS = frozenset({"temperature", "top_p", "top_k"}
 def gemini_model_omits_sampling_params(model: object) -> bool:
     """Whether mobilerun should leave sampling at Google's default.
 
-    Google recommends the default temperature for Gemini 3 models.
+    Google recommends the default temperature for Gemini 3 and later models.
     """
     model_id = str(model or "").strip()
-    return model_id.startswith("gemini-3") or model_id == "gemini-pro-agent"
+    return (
+        model_id.startswith(("gemini-3", "gemini-4")) or model_id == "gemini-pro-agent"
+    )
 
 
 PROVIDER_FAMILIES: tuple[ProviderFamilySpec, ...] = (

@@ -39,6 +39,10 @@ _MAX_RETRIES = 7
 # With the schedule above, this fires after ~11s (1+2+3+5).
 _RECOVERY_AFTER_ATTEMPT = 5
 
+# Portal's error when its accessibility service is not bound, e.g. after the
+# system force-stopped Portal. Waiting does not help, so recover right away.
+_A11Y_SERVICE_NOT_AVAILABLE = "Accessibility service not available"
+
 
 async def fetch_state_with_retry(
     fetch: Callable[[], Awaitable[Dict[str, Any]]],
@@ -52,7 +56,8 @@ async def fetch_state_with_retry(
     Args:
         fetch: Async callable that returns the raw state dict from Portal.
         recovery: Optional async callable invoked once after *recovery_after*
-            consecutive failures (e.g. restart accessibility service).
+            consecutive failures (e.g. restart accessibility service), or
+            after the first failure if Portal's service is not available.
         max_retries: Total number of attempts before giving up.
         retry_delays: Per-attempt delays. If shorter than max_retries - 1,
             the last value is reused for remaining delays.
@@ -107,14 +112,20 @@ async def fetch_state_with_retry(
             )
 
             # Mid-retry recovery: restart the a11y service once
+            service_gone = _A11Y_SERVICE_NOT_AVAILABLE in err_desc
             if (
                 not recovery_attempted
                 and recovery is not None
-                and attempt + 1 >= recovery_after
+                and (attempt + 1 >= recovery_after or service_gone)
                 and not is_last
             ):
                 recovery_attempted = True
-                logger.info("State retrieval failing, attempting recovery...")
+                if service_gone:
+                    logger.info(
+                        "Portal accessibility service is off, re-enabling it..."
+                    )
+                else:
+                    logger.info("State retrieval failing, attempting recovery...")
                 try:
                     await recovery()
                     logger.info("Recovery action completed")
@@ -246,7 +257,7 @@ class AndroidStateProvider(StateProvider):
         self.requires_active_contract_for_coords = vision_enabled
 
     async def _recover_portal(self) -> None:
-        """Restart Portal's accessibility service and TCP socket server."""
+        """Restart Portal's accessibility service, TCP server and keyboard."""
         from mobilerun_core_local.driver.android import AndroidDriver
 
         if not isinstance(self.driver, AndroidDriver):
@@ -290,6 +301,15 @@ class AndroidStateProvider(StateProvider):
                     logger.debug("Auth token refreshed after TCP server restart")
             except Exception as e:
                 logger.debug(f"TCP server restart failed: {e}")
+
+        # 3. A force-stopped Portal also loses the keyboard; switch back to it
+        if getattr(self.driver, "_portal_keyboard_available", False):
+            from mobilerun_core_local.driver.android.portal import setup_keyboard
+
+            try:
+                await setup_keyboard(device)
+            except Exception as e:
+                logger.debug(f"Portal keyboard restore failed: {e}")
 
         await asyncio.sleep(1.5)
 

@@ -3,10 +3,10 @@ revision = 3
 requires-python = ">=3.11, <3.14"
 resolution-markers = [
     "python_full_version >= '3.13' and sys_platform == 'win32'",
-    "python_full_version == '3.12.*' and sys_platform == 'win32'",
-    "python_full_version < '3.12' and sys_platform == 'win32'",
     "python_full_version >= '3.13' and sys_platform != 'win32'",
+    "python_full_version == '3.12.*' and sys_platform == 'win32'",
     "python_full_version == '3.12.*' and sys_platform != 'win32'",
+    "python_full_version < '3.12' and sys_platform == 'win32'",
     "python_full_version < '3.12' and sys_platform != 'win32'",
 ]
 
@@ -1684,7 +1684,7 @@ wheels = [
 
 [[package]]
 name = "mobilerun"
-version = "0.6.22"
+version = "0.7.0"
 source = { editable = "." }
 dependencies = [
     { name = "aiofiles" },
@@ -1768,7 +1768,7 @@ requires-dist = [
     { name = "llama-index-workflows", specifier = ">=2.16.0,<3.0.0" },
     { name = "mcp", specifier = ">=1.28.1,<2.0.0" },
     { name = "mobilerun", extras = ["langfuse"], marker = "extra == 'dev'" },
-    { name = "mobilerun-core-local", extras = ["cloud"], specifier = ">=0.6.1" },
+    { name = "mobilerun-core-local", extras = ["cloud"], specifier = ">=0.6.3" },
     { name = "mobilerun-sdk", specifier = ">=3.2.0" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.0.0" },
     { name = "openinference-instrumentation-llama-index", marker = "extra == 'langfuse'", specifier = ">=3.0.0" },
@@ -1796,7 +1796,7 @@ dev = [
 
 [[package]]
 name = "mobilerun-core-local"
-version = "0.6.1"
+version = "0.6.3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "async-adbutils" },
@@ -1804,9 +1804,9 @@ dependencies = [
     { name = "requests" },
     { name = "rich" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/65/a3/b34fbdaecd51c0aafe5eb4eda661c442105eb6ffedc26f7a897e508b5b9f/mobilerun_core_local-0.6.1.tar.gz", hash = "sha256:e27becfc1cfb12b99bf82d1daad89b975c0e4e16923a318e26dfe472abd2c8ec", size = 77292, upload-time = "2026-10-05T12:02:07.751Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/db/ce/288ebd92a732d314d5122186863c72ed72b33cab70cce3073d5aaf8130e3/mobilerun_core_local-0.6.3.tar.gz", hash = "sha256:f7187d42f060767e58037c3aa3bdbf774920ea4e4519879c301c9b2bc7a00458", size = 54914, upload-time = "2026-10-13T17:02:26.808Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/b8/77/38337b2088d32a6b3cd26d756ba42321a55dc013bb59aa1a0f338ad64a63/mobilerun_core_local-0.6.1-py3-none-any.whl", hash = "sha256:a3a7948dfece3bdabb73c5aa6bf93eb8a020da3d0cd85ddac1b7310a70cfcc34", size = 51979, upload-time = "2026-10-05T12:02:06.358Z" },
+    { url = "https://files.pythonhosted.org/packages/dc/9b/19572366a08eef8c8c475693d71432af16ed5e12efcdc610cb2cad51356d/mobilerun_core_local-0.6.3-py3-none-any.whl", hash = "sha256:91364da308591a3c50911f481e4a6d783cde9ae91cc948bbfe4f9ea72c6e2d4a", size = 52246, upload-time = "2026-10-13T17:02:25.282Z" },
 ]
 
 [package.optional-dependencies]

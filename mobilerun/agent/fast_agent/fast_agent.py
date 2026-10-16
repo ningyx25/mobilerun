@@ -70,13 +70,45 @@ def _malformed_tool_call_correction(attempt: int) -> str:
         f"(attempt {attempt}/{_MALFORMED_TOOL_CALL_LIMIT}). No tool was executed.\n\n"
         "Repeat the intended call using only the ASCII XML tags shown below. Replace "
         "the placeholder names and value with the intended tool and arguments. Do not "
-        "use provider-specific markers, full-width punctuation, or alternate tag names.\n\n"
+        "use provider-specific markers, full-width punctuation, or alternate tag names, "
+        "and write tool-call tags only inside the call, never in your "
+        "explanation. Write <add_memory> before the <function_calls> block, never "
+        "inside it; memory written inside the block was not saved.\n\n"
         "<function_calls>\n"
         '<invoke name="tool_name">\n'
         '<parameter name="parameter_name">value</parameter>\n'
         "</invoke>\n"
         "</function_calls>"
     )
+
+
+def _truncate_message_text(message: ChatMessage, end: int) -> ChatMessage:
+    """Cut text at offset ``end`` of ``message.content``, keeping non-text blocks."""
+    blocks = []
+    start = 0
+    for block in message.blocks:
+        if not isinstance(block, TextBlock):
+            blocks.append(block)
+            continue
+        text = block.text
+        if start + len(text) <= end:
+            blocks.append(block)
+        elif start < end:
+            blocks.append(block.model_copy(update={"text": text[: end - start]}))
+        # ChatMessage.content joins text blocks with "\n".
+        start += len(text) + 1
+    return message.model_copy(update={"blocks": blocks})
+
+
+def _format_results(results: list[ToolResult], ignored_blocks: int) -> str:
+    output = format_tool_results(results)
+    if ignored_blocks:
+        output += (
+            "\nOnly the first <function_calls> block of your response was executed; "
+            f"{ignored_blocks} later block(s) were ignored. Emit exactly one "
+            "<function_calls> block per response."
+        )
+    return output
 
 
 class FastAgent(Workflow):
@@ -397,8 +429,6 @@ class FastAgent(Workflow):
         except Exception as e:
             logger.warning(f"Could not get usage: {e}")
 
-        # Store assistant response (preserves ThinkingBlock, additional_kwargs, etc.)
-        self.shared_state.message_history.append(response.message)
         response_text = response.message.content
 
         # Parse tool calls from response
@@ -406,19 +436,32 @@ class FastAgent(Workflow):
         thought = parse_result.thought
         tool_calls = parse_result.calls
 
+        # Store assistant response (preserves ThinkingBlock, additional_kwargs, etc.)
+        # up to the end of its first block, so later text is never replayed.
+        message = response.message
+        if parse_result.end is not None and response_text[parse_result.end :].strip():
+            message = _truncate_message_text(message, parse_result.end)
+        if parse_result.ignored_blocks:
+            logger.warning(
+                "Ignoring %d <function_calls> block(s) after the first one",
+                parse_result.ignored_blocks,
+            )
+        self.shared_state.message_history.append(message)
+
         # Extract <add_memory> from thought text and append to unified memory
         memory_update = extract_add_memory(thought)
         if memory_update:
             self.shared_state.append_memory(memory_update)
 
         # Store parsed calls for logging/trajectory output. This uses the
-        # executable representation so accidental duplicate XML blocks are not
-        # shown as pending work after deduplication.
+        # executable representation so ignored XML blocks are not shown as
+        # pending work.
         tool_calls_xml = format_tool_calls(tool_calls) if tool_calls else None
 
         # Store tool calls in context for execute step (avoid re-parsing)
         if tool_calls:
             await ctx.store.set("pending_tool_calls", tool_calls)
+            await ctx.store.set("ignored_tool_call_blocks", parse_result.ignored_blocks)
 
         # Update unified state
         self.shared_state.last_thought = thought
@@ -525,6 +568,7 @@ class FastAgent(Workflow):
     ) -> FastAgentOutputEvent | FastAgentEndEvent:
         """Execute parsed tool calls and return results."""
         tool_calls = await ctx.store.get("pending_tool_calls", [])
+        ignored_blocks = await ctx.store.get("ignored_tool_call_blocks", 0)
 
         if not tool_calls:
             event = FastAgentOutputEvent(output="No tool calls to execute.")
@@ -533,7 +577,7 @@ class FastAgent(Workflow):
 
         results: list[ToolResult] = []
 
-        for call in tool_calls:
+        for index, call in enumerate(tool_calls):
             logger.debug(f"Executing: {call.name}({call.parameters})")
             self.tool_call_counter += 1
 
@@ -566,7 +610,7 @@ class FastAgent(Workflow):
                     self.shared_state.finished = False
                     self.shared_state.success = None
                     self.shared_state.answer = ""
-                    results_xml = format_tool_results(results)
+                    results_xml = _format_results(results, ignored_blocks)
                     event = FastAgentOutputEvent(output=results_xml)
                     ctx.write_event_to_stream(event)
                     return event
@@ -593,8 +637,27 @@ class FastAgent(Workflow):
                 ctx.write_event_to_stream(event)
                 return event
 
+            # Later calls were planned assuming this one succeeded.
+            if not action_result.success:
+                skipped = tool_calls[index + 1 :]
+                if skipped:
+                    logger.info(
+                        "Skipping %d tool call(s) after %s failed",
+                        len(skipped),
+                        call.name,
+                    )
+                    results.extend(
+                        ToolResult(
+                            name=later.name,
+                            output=f"Not executed because {call.name} failed.",
+                            is_error=True,
+                        )
+                        for later in skipped
+                    )
+                break
+
         # Format results
-        results_xml = format_tool_results(results)
+        results_xml = _format_results(results, ignored_blocks)
         logger.info("💡 Tool results:", extra={"color": "dim"})
         logger.info(f"{results_xml}")
         await asyncio.sleep(self.agent_config.after_sleep_action)

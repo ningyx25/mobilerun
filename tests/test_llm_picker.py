@@ -463,6 +463,7 @@ def test_gemini_oauth_allows_live_unadvertised_2_5_ids(model: str) -> None:
         "gemini-3.5-flash-lite",
         "gemini-3-flash-preview",
         "gemini-3.1-pro-preview",
+        "gemini-4-argon",
     ],
 )
 def test_gemini_3_google_genai_models_omit_sampling_configuration(model: str) -> None:
