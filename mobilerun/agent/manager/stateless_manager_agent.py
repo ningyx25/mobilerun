@@ -200,9 +200,10 @@ class StatelessManagerAgent(Workflow):
         self.shared_state.a11y_tree = ui_state.elements
         self.shared_state.phone_state = ui_state.phone_state
 
+        # An absent key leaves "" (never a truthy "Unknown" sentinel).
         self.shared_state.update_current_app(
-            package_name=ui_state.phone_state.get("packageName", "Unknown"),
-            activity_name=ui_state.phone_state.get("currentApp", "Unknown"),
+            package_name=ui_state.phone_state.get("packageName", ""),
+            activity_name=ui_state.phone_state.get("currentApp", ""),
         )
 
         ctx.write_event_to_stream(RecordUIStateEvent(ui_state=ui_state.elements))

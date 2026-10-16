@@ -26,6 +26,7 @@ class MobileAgentInitEvent(TelemetryEvent):
     timeout: int
     vision: Dict[str, bool]
     reasoning: bool
+    executor_kind: str = "llm"  # "llm" | "grounded" (executor.kind)
     enable_tracing: bool
     debug: bool
     save_trajectories: str = "none"

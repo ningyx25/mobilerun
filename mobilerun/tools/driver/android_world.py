@@ -361,6 +361,40 @@ class AndroidWorldHttpDriver(DeviceDriver):
     async def list_packages(self, include_system: bool = False) -> List[str]:
         return await self._packages(include_system)
 
+    async def list_launchable_packages(self) -> List[str]:
+        """Packages with a LAUNCHER activity -- what ``start_app`` can open.
+
+        ``/adb/all_packages`` also carries providers, viewers and overlays that
+        ``monkey -c LAUNCHER`` cannot start, so an open_app target chosen from
+        that list can fail for reasons the caller cannot see. The launcher
+        query returns exactly the apps that can be started.
+        """
+        result = await self._generic(
+            [
+                "shell",
+                "cmd",
+                "package",
+                "query-activities",
+                "--brief",
+                "-a",
+                "android.intent.action.MAIN",
+                "-c",
+                "android.intent.category.LAUNCHER",
+            ],
+            server_timeout=30,
+        )
+        output = str(result.get("output") or "")
+        packages = set()
+        for line in output.splitlines():
+            if "/" not in line:
+                continue
+            # Activity rows read "pkg/activity"; the header and attribute
+            # lines do not carry a package-shaped prefix.
+            candidate = line.strip().split("/", 1)[0].strip()
+            if candidate and " " not in candidate and "." in candidate:
+                packages.add(candidate)
+        return sorted(packages)
+
     async def _packages(self, include_system: bool) -> List[str]:
         if include_system:
             data = await self._get("/adb/all_packages")
@@ -453,6 +487,12 @@ class AndroidWorldHttpDriver(DeviceDriver):
             "isEditable": bool(element.get("is_editable")),
             "isFocused": bool(element.get("is_focused")),
             "isVisibleToUser": bool(element.get("is_visible")),
+            # The server reports these; pass them through so scroll-aware
+            # consumers (the grounded executor's observation) can rely on the
+            # flag instead of class-name heuristics.
+            "isScrollable": bool(element.get("is_scrollable")),
+            "isSelected": bool(element.get("is_selected")),
+            "isEnabled": element.get("is_enabled", True) is not False,
             "children": [],
         }
 

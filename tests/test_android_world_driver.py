@@ -537,5 +537,27 @@ def test_run_cli_offers_android_world_control_backend():
     assert "android-world" in result.output
 
 
+def test_list_launchable_packages_parses_the_launcher_query():
+    output = (
+        "34 activities found:\n"
+        "  Activity #0:\n"
+        "    priority=0 preferredOrder=0 match=0x108000 specificIndex=-1 "
+        "isDefault=true\n"
+        "    com.android.camera2/com.android.camera.CameraLauncher\n"
+        "  Activity #1:\n"
+        "    com.android.settings/.Settings\n"
+        "    com.android.settings/com.android.settings.Settings\n"
+    )
+    handlers = _base_handlers()
+    handlers[("POST", "/adb/generic_request")] = lambda r: _ok(output=output)
+    driver, recorded = make_driver(handlers)
+
+    packages = run(driver.list_launchable_packages())
+
+    # De-duplicated and sorted; attribute/header lines never parse as packages.
+    assert packages == ["com.android.camera2", "com.android.settings"]
+    assert recorded[-1].url.path == "/adb/generic_request"
+
+
 if __name__ == "__main__":
     pytest.main([__file__])
