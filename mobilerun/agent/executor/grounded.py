@@ -169,14 +169,18 @@ class GroundedExecutorAgent(Workflow):
         return event
 
     @step
-    async def decide(self, ctx: Context, ev: GroundedContextEvent) -> GroundedDecisionEvent:
+    async def decide(
+        self, ctx: Context, ev: GroundedContextEvent
+    ) -> GroundedDecisionEvent:
         """Ask the operation model what to do with this screen."""
         event = await self._decide(ev)
         ctx.write_event_to_stream(event)
         return event
 
     @step
-    async def ground(self, ctx: Context, ev: GroundedDecisionEvent) -> GroundedPointEvent:
+    async def ground(
+        self, ctx: Context, ev: GroundedDecisionEvent
+    ) -> GroundedPointEvent:
         """Resolve the operation's arguments (grounding model / oneflows)."""
         event = await self._ground(ev)
         # Emit for every operation that ran a oneflow -- including a failed
@@ -193,7 +197,9 @@ class GroundedExecutorAgent(Workflow):
         return event
 
     @step
-    async def execute(self, ctx: Context, ev: GroundedPointEvent) -> GroundedActionResultEvent:
+    async def execute(
+        self, ctx: Context, ev: GroundedPointEvent
+    ) -> GroundedActionResultEvent:
         """Execute the resolved operation through the action layer."""
         event = await self._execute(ev)
         ctx.write_event_to_stream(event)
@@ -234,7 +240,10 @@ class GroundedExecutorAgent(Workflow):
             logger.warning("⚠️ %s", error)
             return self._decision_event(error)
 
-        body: Dict[str, Any] = {**request.as_dict(), "model": self.systemone.operation_model}
+        body: Dict[str, Any] = {
+            **request.as_dict(),
+            "model": self.systemone.operation_model,
+        }
         images = self._encoded_frame()
         if images:
             body["images"] = images
@@ -308,7 +317,9 @@ class GroundedExecutorAgent(Workflow):
             return self._point_event(ev, error=error)
 
         self._ground_fraction = (fx, fy)
-        logger.info(f"🎯 Grounded {self._subgoal!r} -> ({x}, {y})", extra={"color": "yellow"})
+        logger.info(
+            f"🎯 Grounded {self._subgoal!r} -> ({x}, {y})", extra={"color": "yellow"}
+        )
         return self._point_event(ev, x=x, y=y, confidence=confidence)
 
     # -- oneflow argument resolution -----------------------------------------
@@ -383,11 +394,15 @@ class GroundedExecutorAgent(Workflow):
 
         self._oneflow_usage = result.get("usage") if isinstance(result, dict) else None
         self._oneflow_response = (
-            (result.get("response") if isinstance(result, dict) else "") or ""
-        )
-        text = str((result or {}).get("text") if isinstance(result, dict) else result or "").strip()
+            result.get("response") if isinstance(result, dict) else ""
+        ) or ""
+        text = str(
+            (result or {}).get("text") if isinstance(result, dict) else result or ""
+        ).strip()
         if not text:
-            return self._point_event(ev, error="TYPE_TEXT without a suitable text value.")
+            return self._point_event(
+                ev, error="TYPE_TEXT without a suitable text value."
+            )
         text = self._complete_file_extension(text)
         logger.info(f"⌨️ Text resolved: {text!r}", extra={"color": "blue"})
         return self._point_event(ev, text_value=text)
@@ -398,9 +413,7 @@ class GroundedExecutorAgent(Workflow):
         if not self._screenshot:
             return []
         if self._screenshot_b64 is None:
-            encoded = encode_images(
-                [self._screenshot], self.systemone.max_image_pixels
-            )
+            encoded = encode_images([self._screenshot], self.systemone.max_image_pixels)
             self._screenshot_b64 = encoded[0] if encoded else ""
         return [self._screenshot_b64] if self._screenshot_b64 else []
 
@@ -589,7 +602,9 @@ class GroundedExecutorAgent(Workflow):
         # TYPE_TEXT resolve theirs in the ground step (scroll / text oneflows).
         if operation == "OPEN_APP":
             choice = choice_of(answers.get("app_target"))
-            app_target = request.criteria_of("app_target").get(choice) if choice else None
+            app_target = (
+                request.criteria_of("app_target").get(choice) if choice else None
+            )
             if not app_target:
                 return self._decision_event(
                     "OPEN_APP without an offered app target.", operation, confidence
@@ -641,7 +656,9 @@ class GroundedExecutorAgent(Workflow):
             fx, fy = float(point[0]), float(point[1])
         else:
             raw_choice = answer.get("choice")
-            index = -1 if raw_choice is None or raw_choice == "" else int(str(raw_choice))
+            index = (
+                -1 if raw_choice is None or raw_choice == "" else int(str(raw_choice))
+            )
             n_width = int(answer.get("n_width") or 0)
             n_height = int(answer.get("n_height") or 0)
             if index < 0 or n_width <= 0 or n_height <= 0:
@@ -670,7 +687,9 @@ class GroundedExecutorAgent(Workflow):
             # No declared contract: the tree provider's screen is native and
             # the model space is native / coordinate scale.
             width = int(getattr(ui, "screen_width", 0) or self.shared_state.width or 0)
-            height = int(getattr(ui, "screen_height", 0) or self.shared_state.height or 0)
+            height = int(
+                getattr(ui, "screen_height", 0) or self.shared_state.height or 0
+            )
             scale_x = float(getattr(ui, "coordinate_scale_x", 1.0) or 1.0)
             scale_y = float(getattr(ui, "coordinate_scale_y", 1.0) or 1.0)
             if width <= 0 or height <= 0 or scale_x <= 0 or scale_y <= 0:

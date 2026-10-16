@@ -103,8 +103,12 @@ Copy any value the task names exactly as written -- same characters, punctuation
                 response_text, usage = await acomplete_text(
                     self.llm, attempt_prompt, image=image, stream=self.stream
                 )
-            except Exception as exc:  # noqa: BLE001 - a failure is feedback, not a guess
-                logger.warning(f"TextInput LLM call failed (attempt {attempt + 1}): {exc}")
+            except (
+                Exception
+            ) as exc:  # noqa: BLE001 - a failure is feedback, not a guess
+                logger.warning(
+                    f"TextInput LLM call failed (attempt {attempt + 1}): {exc}"
+                )
                 continue
             last_response = response_text
             if attempt == 0:

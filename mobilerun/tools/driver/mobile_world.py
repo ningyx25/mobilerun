@@ -28,7 +28,11 @@ from urllib.parse import urlparse
 from xml.etree import ElementTree as ET
 
 import httpx
-from mobilerun_core_local.driver.base import DeviceDisconnectedError, DeviceDriver, unsupported
+from mobilerun_core_local.driver.base import (
+    DeviceDisconnectedError,
+    DeviceDriver,
+    unsupported,
+)
 
 from mobilerun.tools.driver.android_world import looks_like_http_url
 from mobilerun.tools.helpers.images import ensure_complete_image

@@ -176,7 +176,9 @@ class EpisodeEvidence:
             entry["operation"] = getattr(event, "operation", None)
             entry["x"] = getattr(event, "x", None)
             entry["y"] = getattr(event, "y", None)
-            entry["swipe_start"] = make_serializable(getattr(event, "swipe_start", None))
+            entry["swipe_start"] = make_serializable(
+                getattr(event, "swipe_start", None)
+            )
             entry["swipe_end"] = make_serializable(getattr(event, "swipe_end", None))
             entry["text_value"] = getattr(event, "text_value", None)
         else:

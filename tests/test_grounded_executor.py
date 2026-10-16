@@ -35,7 +35,9 @@ SCREEN = (1080, 2400)
 
 class FakeDriver:
     def __init__(self, apps=None, screenshot=b"\x89PNG-fake"):
-        self.apps = apps if apps is not None else [{"package": "com.foo", "label": "Foo"}]
+        self.apps = (
+            apps if apps is not None else [{"package": "com.foo", "label": "Foo"}]
+        )
         self.screenshot_bytes = screenshot
 
     async def get_apps(self, include_system=True):
@@ -75,7 +77,9 @@ def make_agent(ctx=None, **systemone_overrides):
         reasoning=True,
         vision_only=True,
         after_sleep_action=0.0,
-        executor=ExecutorConfig(kind="grounded", systemone=SystemOneConfig(**systemone_kwargs)),
+        executor=ExecutorConfig(
+            kind="grounded", systemone=SystemOneConfig(**systemone_kwargs)
+        ),
     )
     state = MobileAgentState(instruction="Open the settings")
     state.width, state.height = SCREEN
@@ -107,12 +111,17 @@ def test_grounded_response_event_constructs_with_usage():
     from mobilerun.agent.executor.grounded_events import GroundedResponseEvent
     from mobilerun.agent.usage import UsageResult
 
-    usage = UsageResult(request_tokens=10, response_tokens=5, total_tokens=15, requests=1)
+    usage = UsageResult(
+        request_tokens=10, response_tokens=5, total_tokens=15, requests=1
+    )
     event = GroundedResponseEvent(operation="SWIPE", usage=usage)
     assert event.usage.total_tokens == 15
     assert GroundedResponseEvent(operation="TAP", usage=None).usage is None
     # The raw reply travels on the event so a failed resolution is diagnosable.
-    assert GroundedResponseEvent(operation="TYPE_TEXT", response="raw reply").response == "raw reply"
+    assert (
+        GroundedResponseEvent(operation="TYPE_TEXT", response="raw reply").response
+        == "raw reply"
+    )
     assert GroundedResponseEvent(operation="TYPE_TEXT").response == ""
 
 
@@ -183,7 +192,8 @@ def test_app_target_caps_at_max_apps_keeping_named_first():
 
 def test_state_carries_goal_and_five_recent_actions():
     history = [
-        jev_prompt.HistoryEntry(operation=f"OP{i}", label=f"label {i}") for i in range(7)
+        jev_prompt.HistoryEntry(operation=f"OP{i}", label=f"label {i}")
+        for i in range(7)
     ]
     state = jev_prompt.build_state("do it", history)
     assert state["goal"] == "do it"
@@ -202,9 +212,10 @@ def test_state_carries_goal_and_five_recent_actions():
 
 
 def test_operation_labels_render_without_a_tree():
-    assert json.loads(
-        jev_prompt.operation_label("TAP", tap_point=(540, 60))
-    ) == {"action": "click", "coordinate": [540, 60]}
+    assert json.loads(jev_prompt.operation_label("TAP", tap_point=(540, 60))) == {
+        "action": "click",
+        "coordinate": [540, 60],
+    }
     assert json.loads(
         jev_prompt.operation_label("LONG_PRESS", tap_point=(540, 200))
     ) == {"action": "long_press", "coordinate": [540, 200]}
@@ -234,11 +245,19 @@ def test_parse_decision_maps_answers_onto_operations():
     req = jev_prompt.build_request("Open Chrome", apps=["Chrome", "Clock"])
 
     event = agent._parse_decision(
-        {"answers": {"operation": {"choice": "OPEN_APP", "confidence": 0.75},
-                     "app_target": {"choice": "1"}}},
+        {
+            "answers": {
+                "operation": {"choice": "OPEN_APP", "confidence": 0.75},
+                "app_target": {"choice": "1"},
+            }
+        },
         req,
     )
-    assert (event.operation, event.app_target, event.error) == ("OPEN_APP", "Chrome", "")
+    assert (event.operation, event.app_target, event.error) == (
+        "OPEN_APP",
+        "Chrome",
+        "",
+    )
 
     # SWIPE and TYPE_TEXT carry no arguments in the answer: the oneflows
     # resolve them in the ground step.
@@ -252,9 +271,7 @@ def test_parse_decision_maps_answers_onto_operations():
     )
     assert (event.operation, event.error) == ("TYPE_TEXT", "")
 
-    event = agent._parse_decision(
-        {"answers": {"operation": {"choice": "HOP"}}}, req
-    )
+    event = agent._parse_decision({"answers": {"operation": {"choice": "HOP"}}}, req)
     assert "no execution path" in event.error
 
     # WAIT and ENTER are not offered (nor executable): a stray answer is
@@ -272,8 +289,16 @@ def test_parse_decision_maps_answers_onto_operations():
 def test_grounding_point_falls_back_to_patch_index():
     agent = make_agent()
     fx, fy, conf = agent._grounding_point(
-        {"answers": {"tap_target": {"choice": "25", "n_width": 10, "n_height": 20,
-                                    "confidence": 0.4}}}
+        {
+            "answers": {
+                "tap_target": {
+                    "choice": "25",
+                    "n_width": 10,
+                    "n_height": 20,
+                    "confidence": 0.4,
+                }
+            }
+        }
     )
     # idx 25 -> row 2, col 5 -> patch centres at (5.5/10, 2.5/20)
     assert (fx, fy) == (0.55, 0.125)
@@ -325,7 +350,15 @@ def install_actions(monkeypatch):
 
         return _call
 
-    for name in ("click_at", "long_press_at", "swipe", "system_button", "open_app", "open_bundle_id", "type_text"):
+    for name in (
+        "click_at",
+        "long_press_at",
+        "swipe",
+        "system_button",
+        "open_app",
+        "open_bundle_id",
+        "type_text",
+    ):
         monkeypatch.setattr(
             f"mobilerun.agent.executor.grounded.{name}", asyncio.run(recorder(name))
         )
@@ -410,7 +443,11 @@ def test_open_app_launches_the_exact_package(monkeypatch):
     # answer is a label, and the exact package rides along to start_app.
     result = run_agent(make_agent())
     assert result["outcome"] is True
-    assert result["action"] == {"action": "open_app", "text": "Foo", "app_id": "com.foo"}
+    assert result["action"] == {
+        "action": "open_app",
+        "text": "Foo",
+        "app_id": "com.foo",
+    }
     _args, kwargs = actions["open_bundle_id"]
     assert kwargs.get("app_id") == "com.foo"
 
@@ -489,7 +526,9 @@ def test_systemone_failure_is_feedback_not_an_abort(monkeypatch):
     async def failing_post(base_url, body, *, timeout=300.0):
         raise SystemOneError("HTTP 422: bad state")
 
-    monkeypatch.setattr("mobilerun.agent.executor.grounded.systemone_post", failing_post)
+    monkeypatch.setattr(
+        "mobilerun.agent.executor.grounded.systemone_post", failing_post
+    )
     agent = make_agent()
 
     result = run_agent(agent)

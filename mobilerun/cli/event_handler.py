@@ -142,7 +142,9 @@ class EventHandler:
 
         elif isinstance(event, GroundedPointEvent):
             if event.error:
-                logger.debug(f"⚠️ Grounding failed: {event.error}", extra={"color": "red"})
+                logger.debug(
+                    f"⚠️ Grounding failed: {event.error}", extra={"color": "red"}
+                )
             elif event.x is not None:
                 logger.debug(
                     f"🎯 Grounded at ({event.x}, {event.y})", extra={"color": "cyan"}

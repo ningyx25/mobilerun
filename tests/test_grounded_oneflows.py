@@ -30,6 +30,7 @@ def run_oneflow(agent, **kwargs):
 def fake_completion(text):
     """A response-like object: acomplete_text reads `.text` off it and pulls
     usage best-effort (a plain object llm reports none)."""
+
     async def _complete(llm, prompt, **kwargs):
         return SimpleNamespace(text=text)
 
@@ -71,9 +72,7 @@ def test_text_parse_handles_json_bare_and_garbage():
     assert TextInputAgent._parse_text("line one\nline two") == ""
     # A sentence of prose is refused: it must never reach the device.
     assert (
-        TextInputAgent._parse_text(
-            'I would type "Welsh cakes" into the search field.'
-        )
+        TextInputAgent._parse_text('I would type "Welsh cakes" into the search field.')
         == ""
     )
 

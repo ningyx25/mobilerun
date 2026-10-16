@@ -67,8 +67,7 @@ OPERATION_DESCRIPTIONS = {
         "Press and hold an observed control that requires a long-press gesture."
     ),
     "TYPE_TEXT": (
-        "Replace the currently focused field with the exact value the step "
-        "requires."
+        "Replace the currently focused field with the exact value the step " "requires."
     ),
     "SWIPE": (
         "Swipe the screen to reveal more content in one direction; scrolling "
