@@ -35,21 +35,21 @@ Use tracing to debug agent behavior, monitor token usage, and analyze execution 
 
 #### Setup
 
-**1. Install Phoenix:**
+**1. Start Phoenix in a separate environment:**
 
 ```sh
-uv pip install arize-phoenix
+uv tool run --from arize-phoenix \
+  --with 'strawberry-graphql>=0.326.1' \
+  --with 'graphql-core>=3.2.12' phoenix serve
 ```
 
-**2. Start Phoenix server:**
-
-```sh
-phoenix serve
-```
+Mobilerun includes the libraries needed to send traces. This command installs and
+runs the Phoenix server in an isolated tool environment, allowing it to use its
+own MCP and GraphQL dependencies independently of the agent.
 
 The server starts at `http://localhost:6006` and provides a web UI for viewing traces.
 
-**3. Enable tracing in Mobilerun:**
+**2. Enable tracing in Mobilerun:**
 
 **Via CLI:**
 
@@ -76,7 +76,7 @@ agent = MobileAgent(goal="Open settings", config=config)
 await agent.run()
 ```
 
-**4. View traces:**
+**3. View traces:**
 
 Navigate to `http://localhost:6006` to see:
 - LLM calls with prompts, responses, and token counts

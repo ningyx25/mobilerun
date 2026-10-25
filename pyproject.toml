@@ -1,6 +1,6 @@
 [project]
 name = "mobilerun"
-version = "0.7.0"
+version = "0.7.1"
 description = "A framework for controlling mobile devices through LLM agents"
 authors = [{ name = "Niels Schmidt", email = "niels@droidrun.ai" }]
 dependencies = [
@@ -10,10 +10,11 @@ dependencies = [
     "pydantic>=2.11.10",
     "rich>=14.1.0",
     "InquirerPy>=0.3.4",
-    "arize-phoenix>=14.4.0",
+    "opentelemetry-exporter-otlp-proto-http>=1.40.0",
+    "opentelemetry-sdk>=1.40.0",
     "httpx>=0.27.0",
     "filelock>=3.20.0",
-    "PyJWT[crypto]>=2.13.0",
+    "PyJWT[crypto]>=2.14.0",
     "llama-index-callbacks-arize-phoenix>=0.6.1",
     "llama-index-workflows>=2.16.0,<3.0.0",
     "aiofiles>=25.1.0",
@@ -25,6 +26,13 @@ dependencies = [
     "llama-index-llms-openrouter>=0.4.2",
     "mobilerun-sdk>=3.2.0",
     "mobilerun-core-local[cloud]>=0.6.3",
+    # Security floors also protect installations from the published wheel.
+    "aiohttp>=3.14.4",
+    "anyio>=4.14.2",
+    "certifi>=2026.10.19",
+    "fsspec>=2026.6.0",
+    "Pillow>=13.0.0",
+    "urllib3>=2.8.0",
 ]
 requires-python = ">=3.11,<3.14"
 readme = "README.md"
@@ -56,7 +64,7 @@ Documentation = "https://docs.mobilerun.ai/"
 
 [project.optional-dependencies]
 anthropic = [
-    "anthropic>=0.67.0",
+    "anthropic>=0.67.0,<2",
     "llama-index-llms-anthropic>=0.8.6,<0.9.0",
 ]
 deepseek = []
@@ -176,8 +184,7 @@ contents = ["mobilerun.tools.cloud.MobileRunTools.*"]
 
 [dependency-groups]
 dev = [
-    "arize-phoenix>=14.4.0",
-    "anthropic>=0.67.0",
+    "anthropic>=0.67.0,<2",
     "bandit>=1.8.6",
     "llama-index-callbacks-arize-phoenix>=0.6.1",
     "llama-index-llms-anthropic>=0.8.6,<0.9.0",

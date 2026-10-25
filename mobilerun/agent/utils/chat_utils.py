@@ -25,6 +25,10 @@ def _ensure_image_bytes(image_source: Union[str, Path, Image.Image, bytes]) -> b
     else:
         raise ValueError(f"Unsupported image type: {type(image_source)}")
 
+    # Pillow 13 requires explicit conversion to PNG's 16-bit grayscale range.
+    if image.mode == "I":
+        image = image.convert("I;16")
+
     buffer = BytesIO()
     image.save(buffer, format="PNG")
     return buffer.getvalue()

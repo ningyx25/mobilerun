@@ -59,6 +59,17 @@
 
 Use the framework when you want to run the agent on your machine. Use [Mobilerun Cloud](https://cloud.mobilerun.ai) when you want a ready-to-go solution for your local phones or cloud-hosted virtual/physical phones, managed infrastructure, and API-driven device workflows without running the agent on your local machine. [Check out our benchmark results](https://mobilerun.ai/benchmark).
 
+## 🎯 Platform Support
+
+| Target | Supported | Setup |
+| --- | :---: | --- |
+| Android Real Device | ✅ | `adb` or the [Portal](https://github.com/droidrun/mobilerun-portal) app |
+| Android Emulator | ✅ | Running emulator (`adb`) |
+| iOS Real Device | ✅ | [`mobilerun-ios`](https://docs.mobilerun.ai/framework/guides/device-setup) over USB |
+| iOS Simulator | ✅ | [iOS Portal](https://github.com/droidrun/ios-portal) app |
+| Android on [Mobilerun Cloud](https://mobilerun.ai) | ✅ | Hosted phones or your own |
+| iOS on [Mobilerun Cloud](https://mobilerun.ai) | ✅ | Hosted iPhones or your own |
+
 ## 📦 Installation
 
 > **Note:** Python 3.14 is not currently supported. Please use Python `>=3.11,<3.14`.
@@ -90,7 +101,7 @@ mobilerun configure
 mobilerun run "Open settings and turn on dark mode"
 ```
 
-Before starting, make sure you have [ADB](https://developer.android.com/studio/releases/platform-tools) installed and an Android device with Developer options and USB debugging enabled. iOS setup is supported separately through the iOS Portal flow.
+Before starting, make sure you have [ADB](https://developer.android.com/studio/releases/platform-tools) installed and an Android device with Developer options and USB debugging enabled. For iOS, set up [`mobilerun-ios`](https://docs.mobilerun.ai/framework/guides/device-setup) for an iPhone or the [iOS Portal](https://github.com/droidrun/ios-portal) app for the simulator.
 
 ### 1. Install the Portal on your device
 
@@ -138,7 +149,7 @@ Read the full [framework documentation](https://docs.mobilerun.ai/framework/quic
 
 - **CLI:** Run one-off natural language tasks, inspect devices, replay macros, and debug from the terminal.
 - **Python API:** Build custom mobile automation workflows with Python and use custom tools.
-- **Android and iOS support:** Control Android through the Portal app or target iOS through the iOS Portal flow.
+- **Android and iOS support:** Control Android through the Portal app, iPhones through `mobilerun-ios`, or the iOS Simulator through the iOS Portal app.
 - **Portal-based control:** Use UI trees, screenshots, text input, gestures, app launching, and device state from the Portal runtime.
 - **Vision mode:** Send screenshots to the LLM with `--vision`, or use screenshot-only control with `--vision-only` (useful for the apps that do not have a11y tree information).
 - **Reasoning mode:** Use `--reasoning` for manager-executor planning on longer or more complex tasks.
@@ -192,7 +203,7 @@ Set up https://github.com/droidrun/mobile-harness for me.
 Read `install.md` and follow the steps to install `mobile-harness`.
 ```
 
-The skill teaches the agent to drive local devices (ADB, Portal, iOS Simulator) and Mobilerun Cloud phones.
+The skill teaches the agent to drive local devices (ADB, Portal, iPhones, iOS Simulator) and Mobilerun Cloud phones.
 
 ## 🎬 Demo Videos
 
@@ -220,6 +231,16 @@ Shows browsing, app navigation, and result extraction from a natural-language ta
 - Event-driven automation from schedules, notifications, or custom triggers
 - Data extraction from native mobile apps
 - Running automations on multiple devices at once
+
+## 🌐 Part of Mobilerun
+
+Mobilerun is one piece of a toolkit for driving real phones with AI agents:
+
+- **[Mobilerun Portal](https://github.com/droidrun/mobilerun-portal)**: the Android app that lets you control and automate your phone.
+- **[mobilerun-ios](https://github.com/droidrun/mobilerun-ios-releases)**: connects an iPhone over USB, either to this framework (`--local`) or to Mobilerun Cloud.
+- **[iOS Portal](https://github.com/droidrun/ios-portal)**: the iOS app that lets the framework drive the iOS Simulator.
+- **[mobile-harness](https://github.com/droidrun/mobile-harness)**: an agent skill that lets Claude Code, Codex, and OpenClaw control Android, iOS, and cloud phones. App cards teach the agent how each app works, and shared memory keeps what it learns across tasks. It scores 100% on AndroidWorld and 98.34% on iOSWorld ([benchmark results](https://mobilerun.ai/benchmark/)).
+- **[Mobilerun Cloud](https://mobilerun.ai)**: cloud phones for AI agents. Hosted Android phones and dedicated iPhones, real numbers and inboxes for SMS and email codes, residential and mobile IPs in any region, scheduled and event triggers, and mobilerun VA, a no-code assistant for mobile tasks. Drive it through the REST API, [Python](https://github.com/droidrun/mobilerun-sdk-python) and [TypeScript](https://github.com/droidrun/mobilerun-sdk-typescript) SDKs, or MCP, and watch every step live.
 
 ## 📚 Documentation
 
