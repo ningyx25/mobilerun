@@ -48,7 +48,7 @@ mobilerun run "<command>" [OPTIONS]
 | `--reasoning` | Enable planning mode | `false` |
 | `--vision` | Enable vision for all agents | From config |
 | `--vision-only` | Use screenshots only, without an accessibility tree | `false` |
-| `--control-backend visual-remote` | Use a compatible visual remote backend | Platform default |
+| `--control-backend` | `visual-remote` (compatible screenshot/action server), `android-world` (AndroidWorld environment server), or `mobile-world` (MobileWorld environment server); for the docker backends `--device` is the server URL | Platform default |
 | `--tcp` | Use TCP instead of content provider | `false` |
 | `--debug` | Verbose logging | `false` |
 | `--save-trajectory` | Save execution (`none`, `step`, `action`) | `none` |
@@ -235,6 +235,110 @@ saved `apiKeys.minimax` entry in `credentials/auth-profiles.json` inside
 Mobilerun's platform configuration directory. Pasting a new key in the wizard
 updates that saved entry. The top-level `credentials.enabled` setting controls
 device secrets and does not configure LLM provider authentication.
+
+  </Tab>
+
+  <Tab title="Benchmark">
+
+Run a benchmark suite with the mobilerun agent against a docker environment
+server:
+
+- **androidworld** — the 116 AndroidWorld tasks
+  ([android_world](https://github.com/google-research/android_world);
+  `docker build -t android_world:latest . && ./scripts/run_container.sh 5000`).
+- **mobileworld** — the 117 pure-GUI MobileWorld tasks (of 201; tasks tagged
+  `agent-mcp` / `agent-user-interaction` are excluded unless
+  `--enable-mcp` / `--enable-user-interaction` is passed, and need subsystems
+  mobilerun does not provide yet).
+
+A cold container needs 5-10 minutes to boot the emulator.
+
+### Usage
+
+```bash
+mobilerun runbench --benchmark-name androidworld [OPTIONS]
+mobilerun runbench --benchmark-name mobileworld [OPTIONS]
+```
+
+### Common Flags
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--benchmark-name` | Benchmark to run (`androidworld` or `mobileworld`) | Required |
+| `--device`, `-d` | Environment server URL | `http://localhost:5000` / `http://localhost:6800` |
+| `--tasks` | Comma-separated task names to run | All (116 / 117) |
+| `--task-index-range` | 1-based `START-END` range over the task list (e.g. `59-116`) | All |
+| `--difficulty` | Only run `easy`, `medium` and/or `hard` tasks (androidworld only) | All |
+| `--steps` | Max steps per task | `10 x task complexity` / `50` |
+| `--enable-mcp` / `--enable-user-interaction` | mobileworld: include those task groups | `false` |
+| `--device-id` | mobileworld: device id on the server | `emulator-5554` |
+| `--output`, `-o` | Results JSON path | `runs/<benchmark>_<timestamp>.json` |
+| `--evidence` / `--no-evidence` | Record a rich per-episode evidence bundle | `true` |
+| `--resume` | Skip tasks already recorded in the output file | `false` |
+| `--dry-run` | List the selected tasks and exit | `false` |
+| `--provider` / `--model` | LLM provider/model override | From config |
+| `--verbose` | Stream agent logs while running | `false` |
+
+### Examples
+
+```bash
+# Run a couple of tasks as a smoke test
+mobilerun runbench --benchmark-name androidworld -d http://localhost:5000 \
+    --tasks ClockStopWatchRunning,SystemBluetoothTurnOn
+
+# Run the first half of the suite, resuming from an earlier run
+mobilerun runbench --benchmark-name androidworld -d http://localhost:5000 \
+    --task-index-range 1-58 -o runs/aw_half1.json --resume
+
+# MobileWorld: run a pure-GUI task against the docker server
+mobilerun runbench --benchmark-name mobileworld -d http://localhost:6800 \
+    --tasks SumFileLinesTask -o runs/mw.json
+```
+
+Results are recorded per task (server score plus an AndroidWorld-style gated
+score that is 0 unless the agent declared the episode finished), written
+incrementally to the output JSON, and summarized by difficulty at the end.
+
+The results file **accumulates**: writing to an existing `--output` merges
+rather than replaces, so sharded runs (`--task-index-range`), multiple
+servers, and `--resume` all contribute to one file. Each write is locked, so
+concurrent writers cannot clobber each other. To start over, delete the file
+or point `--output` somewhere new.
+
+Provenance is recorded at two levels:
+
+- `runs[]` — one entry per invocation: `run_id`, `server_url`, `model`, the
+  shard arguments (`task_index_range`, `tasks_filter`, `difficulty`), timing
+  and how many tasks it ran. Top-level `started_at`/`finished_at` span every
+  run; `updated_at` is the last write.
+- each task row carries `run_id` and `server_url`, so it can be traced back to
+  the invocation (and thus the shard and machine) that produced it.
+
+`summary` (including `total_runtime_s`, the sum of episode durations) is
+written on every update, with or without evidence capture.
+
+### Evidence bundle
+
+By default every episode also gets a full evidence directory, so a run can be
+audited and debugged after the fact:
+
+```
+runs/androidworld_<timestamp>.json            # run document: metadata + tasks + summary (incl. total tokens)
+runs/androidworld_<timestamp>_evidence/
+  <Task>_<idx>/
+    episode.json          # score, goal, complexity, max_steps, error, usage, paths
+    timeline.json         # distilled per-step timeline (thought / raw LLM response /
+                          #   tool call + result / observation) + cumulative token usage
+    conversation.json     # the full LLM conversation (system/user, injected device state)
+    ui_tree_before.json   # real accessibility tree before the episode
+    ui_tree_after.json    # real accessibility tree the server scored
+    trajectory/           # the agent's own artifacts: trajectory.json, per-step
+                          #   screenshots/ and macro.json
+```
+
+The result row references its bundle (`evidence_dir`, `trajectory_dir`,
+`timeline_path`, `conversation_path`, `ui_tree_paths`, `usage_totals`). Pass
+`--no-evidence` to skip it (faster, less disk).
 
   </Tab>
 

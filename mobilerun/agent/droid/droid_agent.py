@@ -106,6 +106,18 @@ from mobilerun.telemetry import (
     flush,
 )
 from mobilerun.telemetry.phoenix import clean_span
+from mobilerun.tools.driver.android_world import (
+    ANDROID_WORLD_CONNECTION,
+    ANDROID_WORLD_DEFAULT_URL,
+    AndroidWorldHttpDriver,
+    looks_like_android_world_url,
+)
+from mobilerun.tools.driver.mobile_world import (
+    MOBILE_WORLD_CONNECTION,
+    MOBILE_WORLD_DEFAULT_URL,
+    MobileWorldHttpDriver,
+    looks_like_mobile_world_url,
+)
 from mobilerun.tools.filters import ConciseFilter, DetailedFilter
 from mobilerun.tools.formatters import IndexedFormatter
 from mobilerun.tools.ui.ios_provider import IOSStateProvider
@@ -660,14 +672,57 @@ class MobileAgent(Workflow):
         control_backend = _normalize_control_backend(
             self.resolved_device_config.control_backend
         )
-        if control_backend and control_backend != VISUAL_REMOTE_CONNECTION:
+        supported_backends = {
+            VISUAL_REMOTE_CONNECTION,
+            ANDROID_WORLD_CONNECTION,
+            MOBILE_WORLD_CONNECTION,
+        }
+        if control_backend and control_backend not in supported_backends:
             raise ValueError(
                 "Unsupported device control backend "
                 f"'{self.resolved_device_config.control_backend}'. Supported: "
-                f"{VISUAL_REMOTE_CONNECTION}. Omit control backend for the "
-                "platform default."
+                f"{', '.join(sorted(supported_backends))}. Omit control backend "
+                "for the platform default."
+            )
+        if is_ios and control_backend in (
+            ANDROID_WORLD_CONNECTION,
+            MOBILE_WORLD_CONNECTION,
+        ):
+            # These drivers serve the Android-shaped state; the iOS state
+            # provider would not understand it, so fail loudly instead of
+            # pairing the two halves of the pipeline wrongly.
+            raise ValueError(
+                f"The '{control_backend}' control backend drives an Android "
+                "emulator server and cannot be combined with platform 'ios'."
             )
         is_visual_remote = control_backend == VISUAL_REMOTE_CONNECTION
+        serial = self.resolved_device_config.serial
+        # An http(s) URL in the serial is never a valid ADB serial. Pick the
+        # docker environment backend by the shared port convention (500* =
+        # AndroidWorld, 680* = MobileWorld); an explicit control_backend wins,
+        # and any other http(s) URL defaults to android-world (unchanged).
+        is_mobile_world = control_backend == MOBILE_WORLD_CONNECTION or (
+            control_backend is None
+            and not is_ios
+            and looks_like_mobile_world_url(serial)
+        )
+        is_android_world = control_backend == ANDROID_WORLD_CONNECTION or (
+            control_backend is None
+            and not is_ios
+            and looks_like_android_world_url(serial)
+            and not is_mobile_world
+        )
+        if control_backend is None and (is_android_world or is_mobile_world):
+            logger.debug(
+                "Device serial %r looks like an environment server URL; using "
+                "the %s control backend.",
+                serial,
+                (
+                    MOBILE_WORLD_CONNECTION
+                    if is_mobile_world
+                    else ANDROID_WORLD_CONNECTION
+                ),
+            )
 
         if self._injected_driver is not None:
             driver = self._injected_driver
@@ -678,6 +733,16 @@ class MobileAgent(Workflow):
             driver = VisualRemoteDriver(
                 url=visual_remote_url,
                 device_id=self.resolved_device_config.device_id,
+            )
+            await driver.connect()
+        elif is_mobile_world:
+            driver = MobileWorldHttpDriver(
+                url=self.resolved_device_config.serial or MOBILE_WORLD_DEFAULT_URL
+            )
+            await driver.connect()
+        elif is_android_world:
+            driver = AndroidWorldHttpDriver(
+                url=self.resolved_device_config.serial or ANDROID_WORLD_DEFAULT_URL
             )
             await driver.connect()
         elif is_ios:
@@ -730,7 +795,13 @@ class MobileAgent(Workflow):
 
         # Wrap with StealthDriver if stealth mode enabled
         stealth_enabled = self.config.tools and self.config.tools.stealth
-        if stealth_enabled and not is_ios and not is_visual_remote:
+        if (
+            stealth_enabled
+            and not is_ios
+            and not is_visual_remote
+            and not is_android_world
+            and not is_mobile_world
+        ):
             driver = StealthDriver(driver)
 
         # Wrap with RecordingDriver if trajectory saving enabled
@@ -860,12 +931,17 @@ class MobileAgent(Workflow):
             self.executor_agent.registry = self.registry
             self.executor_agent.action_ctx = self.action_ctx
 
-        # ── 6. Fetch device date once ─────────────────────────────────
+        # ── 6. Fetch device date once (best-effort) ───────────────────
+        # Not every backend can report a date (e.g. the MobileWorld server has
+        # no date endpoint); an empty value simply drops the <device_date>
+        # block from the prompt.
         try:
             self.shared_state.device_date = await driver.get_date()
         except NotImplementedError:
             # Optional prompt context; older Portal HTTP drivers have no date.
-            self.shared_state.device_date = ""
+            logger.debug(
+                "Driver %s does not provide a device date", type(driver).__name__
+            )
 
         # ── 7. Telemetry init event ───────────────────────────────────
         capture(

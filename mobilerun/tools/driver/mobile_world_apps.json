@@ -1,0 +1,722 @@
+[
+  {
+    "package": "ai.perplexity.app.android",
+    "label": "Perplexity"
+  },
+  {
+    "package": "ai.x.grok",
+    "label": "Grok"
+  },
+  {
+    "package": "app.podcast.cosmos",
+    "label": "小宇宙"
+  },
+  {
+    "package": "au.com.amaysim.android",
+    "label": "amaysim"
+  },
+  {
+    "package": "au.com.commsec.android.CommSecPocket",
+    "label": "Pocket"
+  },
+  {
+    "package": "cmb.pb",
+    "label": "招商银行"
+  },
+  {
+    "package": "cn.com.cmbc.newmbank",
+    "label": "民生银行"
+  },
+  {
+    "package": "cn.damai",
+    "label": "大麦"
+  },
+  {
+    "package": "cn.samsclub.app",
+    "label": "山姆会员商店"
+  },
+  {
+    "package": "cn.wps.moffice_eng",
+    "label": "WPS Office"
+  },
+  {
+    "package": "code.name.monkey.retromusic",
+    "label": "Retro Music"
+  },
+  {
+    "package": "com.MobileTicket",
+    "label": "铁路12306"
+  },
+  {
+    "package": "com.Project100Pi.themusicplayer",
+    "label": "Pi Music Player"
+  },
+  {
+    "package": "com.Slack",
+    "label": "Slack"
+  },
+  {
+    "package": "com.absinthe.libchecker",
+    "label": "LibChecker"
+  },
+  {
+    "package": "com.airbnb.android",
+    "label": "爱彼迎"
+  },
+  {
+    "package": "com.alibaba.aliyun",
+    "label": "阿里云"
+  },
+  {
+    "package": "com.alibaba.android.rimet",
+    "label": "钉钉"
+  },
+  {
+    "package": "com.alibaba.wireless",
+    "label": "阿里巴巴"
+  },
+  {
+    "package": "com.aliyun.tongyi",
+    "label": "千问"
+  },
+  {
+    "package": "com.android.camera2",
+    "label": "Camera"
+  },
+  {
+    "package": "com.android.chrome",
+    "label": "Chrome"
+  },
+  {
+    "package": "com.android.contacts",
+    "label": "Contacts"
+  },
+  {
+    "package": "com.android.deskclock",
+    "label": "Clock"
+  },
+  {
+    "package": "com.android.email",
+    "label": "邮件"
+  },
+  {
+    "package": "com.android.fileexplorer",
+    "label": "Files"
+  },
+  {
+    "package": "com.android.mms",
+    "label": "信息"
+  },
+  {
+    "package": "com.android.settings",
+    "label": "Settings"
+  },
+  {
+    "package": "com.android.soundrecorder",
+    "label": "AudioRecorder"
+  },
+  {
+    "package": "com.autonavi.minimap",
+    "label": "高德地图"
+  },
+  {
+    "package": "com.baidu.BaiduMap",
+    "label": "百度地图"
+  },
+  {
+    "package": "com.baidu.netdisk",
+    "label": "百度网盘"
+  },
+  {
+    "package": "com.bochk.app.aos",
+    "label": "BOCHK 中银香港"
+  },
+  {
+    "package": "com.booking",
+    "label": "Booking.com缤客"
+  },
+  {
+    "package": "com.brave.browser",
+    "label": "Brave"
+  },
+  {
+    "package": "com.cainiao.wireless",
+    "label": "菜鸟"
+  },
+  {
+    "package": "com.chinamworld.bocmbci",
+    "label": "中国银行"
+  },
+  {
+    "package": "com.chinamworld.main",
+    "label": "中国建设银行"
+  },
+  {
+    "package": "com.citiccard.mobilebank",
+    "label": "动卡空间"
+  },
+  {
+    "package": "com.cmi.jegotrip",
+    "label": "无忧行"
+  },
+  {
+    "package": "com.coolapk.market",
+    "label": "酷安"
+  },
+  {
+    "package": "com.ct.client",
+    "label": "中国电信"
+  },
+  {
+    "package": "com.deepseek.chat",
+    "label": "DeepSeek"
+  },
+  {
+    "package": "com.dianping.v1",
+    "label": "大众点评"
+  },
+  {
+    "package": "com.douban.frodo",
+    "label": "豆瓣"
+  },
+  {
+    "package": "com.duolingo",
+    "label": "Duolingo"
+  },
+  {
+    "package": "com.eastmoney.android.berlin",
+    "label": "东方财富"
+  },
+  {
+    "package": "com.eg.android.AlipayGphone",
+    "label": "支付宝"
+  },
+  {
+    "package": "com.einnovation.temu",
+    "label": "Temu"
+  },
+  {
+    "package": "com.eusoft.eudic",
+    "label": "欧路词典"
+  },
+  {
+    "package": "com.expedia.bookings",
+    "label": "Expedia"
+  },
+  {
+    "package": "com.finshell.wallet",
+    "label": "钱包"
+  },
+  {
+    "package": "com.flauschcode.broccoli",
+    "label": "Broccoli"
+  },
+  {
+    "package": "com.ft07.serverchan.app3.server_app3",
+    "label": "Server酱"
+  },
+  {
+    "package": "com.getsurfboard",
+    "label": "Surfboard"
+  },
+  {
+    "package": "com.github.android",
+    "label": "GitHub"
+  },
+  {
+    "package": "com.gmailclone",
+    "label": "Mail"
+  },
+  {
+    "package": "com.google.android.apps.adm",
+    "label": "查找中心"
+  },
+  {
+    "package": "com.google.android.apps.authenticator2",
+    "label": "Authenticator"
+  },
+  {
+    "package": "com.google.android.apps.bard",
+    "label": "Gemini"
+  },
+  {
+    "package": "com.google.android.apps.books",
+    "label": "Google Play Books"
+  },
+  {
+    "package": "com.google.android.apps.docs",
+    "label": "Google Drive"
+  },
+  {
+    "package": "com.google.android.apps.docs.editors.docs",
+    "label": "Google Docs"
+  },
+  {
+    "package": "com.google.android.apps.docs.editors.slides",
+    "label": "Google Slides"
+  },
+  {
+    "package": "com.google.android.apps.dynamite",
+    "label": "Google Chat"
+  },
+  {
+    "package": "com.google.android.apps.fitness",
+    "label": "Google Fit"
+  },
+  {
+    "package": "com.google.android.apps.labs.language.tailwind",
+    "label": "NotebookLM"
+  },
+  {
+    "package": "com.google.android.apps.maps",
+    "label": "地图"
+  },
+  {
+    "package": "com.google.android.apps.messaging",
+    "label": "SMS"
+  },
+  {
+    "package": "com.google.android.apps.nbu.files",
+    "label": "Google Files"
+  },
+  {
+    "package": "com.google.android.apps.nexuslauncher",
+    "label": "桌面"
+  },
+  {
+    "package": "com.google.android.apps.tasks",
+    "label": "Google Tasks"
+  },
+  {
+    "package": "com.google.android.calendar",
+    "label": "Google Calendar"
+  },
+  {
+    "package": "com.google.android.contacts",
+    "label": "Google Contacts"
+  },
+  {
+    "package": "com.google.android.deskclock",
+    "label": "Google Clock"
+  },
+  {
+    "package": "com.google.android.documentsui",
+    "label": "files"
+  },
+  {
+    "package": "com.google.android.gm",
+    "label": "Gmail"
+  },
+  {
+    "package": "com.google.android.googlequicksearchbox",
+    "label": "Google"
+  },
+  {
+    "package": "com.google.android.inputmethod.latin",
+    "label": "Gboard"
+  },
+  {
+    "package": "com.google.android.keep",
+    "label": "Google Keep"
+  },
+  {
+    "package": "com.google.android.webview",
+    "label": "Android System WebView"
+  },
+  {
+    "package": "com.greenpoint.android.mc10086.activity",
+    "label": "中国移动"
+  },
+  {
+    "package": "com.haier.uhome.uplus",
+    "label": "海尔智家"
+  },
+  {
+    "package": "com.hanweb.android.zhejiang.activity",
+    "label": "浙里办"
+  },
+  {
+    "package": "com.hexin.plat.android",
+    "label": "同花顺"
+  },
+  {
+    "package": "com.icbc",
+    "label": "中国工商银行"
+  },
+  {
+    "package": "com.jingdong.app.mall",
+    "label": "京东"
+  },
+  {
+    "package": "com.jingyao.easybike",
+    "label": "哈啰"
+  },
+  {
+    "package": "com.larus.nova",
+    "label": "豆包"
+  },
+  {
+    "package": "com.lego.legobuildinginstructions",
+    "label": "LEGO® Builder"
+  },
+  {
+    "package": "com.linkedin.android",
+    "label": "LinkedIn"
+  },
+  {
+    "package": "com.mattermost.rn",
+    "label": "Mattermost"
+  },
+  {
+    "package": "com.mattermost.rnbeta",
+    "label": "Mattermost"
+  },
+  {
+    "package": "com.mcdonalds.app",
+    "label": "McDonald's"
+  },
+  {
+    "package": "com.mcdonalds.gma.cn",
+    "label": "麦当劳"
+  },
+  {
+    "package": "com.meituan.retail.v.android",
+    "label": "小象超市"
+  },
+  {
+    "package": "com.mi.health",
+    "label": "小米运动健康"
+  },
+  {
+    "package": "com.miHoYo.hkrpg",
+    "label": "崩坏：星穹铁道"
+  },
+  {
+    "package": "com.molink.john.hummingbird",
+    "label": "bebird"
+  },
+  {
+    "package": "com.mybank.android.phone",
+    "label": "网商银行"
+  },
+  {
+    "package": "com.ncarzone.tmyc",
+    "label": "天猫养车"
+  },
+  {
+    "package": "com.nearme.instant.platform",
+    "label": "快应用服务框架"
+  },
+  {
+    "package": "com.netease.cloudmusic",
+    "label": "网易云音乐"
+  },
+  {
+    "package": "com.openai.chatgpt",
+    "label": "ChatGPT"
+  },
+  {
+    "package": "com.opos.ads",
+    "label": "智能推荐服务"
+  },
+  {
+    "package": "com.oray.sunlogin",
+    "label": "向日葵远程控制"
+  },
+  {
+    "package": "com.papegames.lysk.cn",
+    "label": "恋与深空"
+  },
+  {
+    "package": "com.petkit.android",
+    "label": "小佩宠物"
+  },
+  {
+    "package": "com.quark.browser",
+    "label": "夸克"
+  },
+  {
+    "package": "com.quora.android",
+    "label": "Quora"
+  },
+  {
+    "package": "com.rammigsoftware.bluecoins",
+    "label": "Bluecoins"
+  },
+  {
+    "package": "com.reddit.frontpage",
+    "label": "Reddit"
+  },
+  {
+    "package": "com.redteamobile.roaming",
+    "label": "逍遥游"
+  },
+  {
+    "package": "com.reqable.android",
+    "label": "Reqable"
+  },
+  {
+    "package": "com.rytong.ceair",
+    "label": "东方航空"
+  },
+  {
+    "package": "com.sankuai.meituan",
+    "label": "美团"
+  },
+  {
+    "package": "com.sdu.didi.psnger",
+    "label": "滴滴出行"
+  },
+  {
+    "package": "com.server.auditor.ssh.client",
+    "label": "Termius"
+  },
+  {
+    "package": "com.sgcc.evs.echarge",
+    "label": "e充电"
+  },
+  {
+    "package": "com.sgcc.wsgw.cn",
+    "label": "网上国网"
+  },
+  {
+    "package": "com.sinyee.babybus.story",
+    "label": "小布咕"
+  },
+  {
+    "package": "com.smk",
+    "label": "杭州市民卡"
+  },
+  {
+    "package": "com.smzdm.client.android",
+    "label": "什么值得买"
+  },
+  {
+    "package": "com.sohu.inputmethod.sogouoem",
+    "label": "搜狗输入法定制版"
+  },
+  {
+    "package": "com.spotify.music",
+    "label": "Spotify"
+  },
+  {
+    "package": "com.ss.android.lark",
+    "label": "飞书"
+  },
+  {
+    "package": "com.ss.android.ugc.aweme",
+    "label": "抖音"
+  },
+  {
+    "package": "com.substack.app",
+    "label": "Substack"
+  },
+  {
+    "package": "com.tailscale.ipn",
+    "label": "Tailscale"
+  },
+  {
+    "package": "com.taobao.idlefish",
+    "label": "闲鱼"
+  },
+  {
+    "package": "com.taobao.taobao",
+    "label": "淘宝"
+  },
+  {
+    "package": "com.taobao.trip",
+    "label": "飞猪旅行"
+  },
+  {
+    "package": "com.taou.maimai",
+    "label": "脉脉"
+  },
+  {
+    "package": "com.tencent.androidqqmail",
+    "label": "QQ邮箱"
+  },
+  {
+    "package": "com.tencent.mm",
+    "label": "微信"
+  },
+  {
+    "package": "com.tencent.mobileqq",
+    "label": "QQ"
+  },
+  {
+    "package": "com.tencent.qqlive",
+    "label": "腾讯视频"
+  },
+  {
+    "package": "com.tencent.qqmusic",
+    "label": "QQ音乐"
+  },
+  {
+    "package": "com.tencent.wemeet.app",
+    "label": "腾讯会议"
+  },
+  {
+    "package": "com.tencent.wetype",
+    "label": "微信输入法"
+  },
+  {
+    "package": "com.teslamotors.tesla",
+    "label": "Tesla"
+  },
+  {
+    "package": "com.testmall.app",
+    "label": "淘店"
+  },
+  {
+    "package": "com.thfund.client",
+    "label": "天弘基金"
+  },
+  {
+    "package": "com.tmri.app.main",
+    "label": "交管12123"
+  },
+  {
+    "package": "com.transferwise.android",
+    "label": "Wise"
+  },
+  {
+    "package": "com.twitter.android",
+    "label": "X"
+  },
+  {
+    "package": "com.ubercab",
+    "label": "Uber"
+  },
+  {
+    "package": "com.umetrip.android.msky.app",
+    "label": "航旅纵横"
+  },
+  {
+    "package": "com.unionpay",
+    "label": "云闪付"
+  },
+  {
+    "package": "com.unionpay.tsmservice",
+    "label": "银联可信服务安全组件"
+  },
+  {
+    "package": "com.videogo",
+    "label": "萤石云视频"
+  },
+  {
+    "package": "com.webank.wemoney",
+    "label": "微众银行"
+  },
+  {
+    "package": "com.whatsapp",
+    "label": "WhatsApp"
+  },
+  {
+    "package": "com.wudaokou.hippo",
+    "label": "盒马"
+  },
+  {
+    "package": "com.x8bit.bitwarden",
+    "label": "Bitwarden"
+  },
+  {
+    "package": "com.xiaomi.mico",
+    "label": "小米音箱"
+  },
+  {
+    "package": "com.xiaomi.shop",
+    "label": "小米商城"
+  },
+  {
+    "package": "com.xiaomi.smarthome",
+    "label": "米家"
+  },
+  {
+    "package": "com.xingin.xhs",
+    "label": "小红书"
+  },
+  {
+    "package": "com.xunmeng.pinduoduo",
+    "label": "拼多多"
+  },
+  {
+    "package": "com.youku.phone",
+    "label": "优酷视频"
+  },
+  {
+    "package": "com.zerotier.one",
+    "label": "ZeroTier One"
+  },
+  {
+    "package": "com.zhihu.android",
+    "label": "知乎"
+  },
+  {
+    "package": "com.zhiliaoapp.musically",
+    "label": "TikTok"
+  },
+  {
+    "package": "com.zhongan.ibank",
+    "label": "ZA Bank"
+  },
+  {
+    "package": "com.zuzuChe",
+    "label": "租租车"
+  },
+  {
+    "package": "ctrip.android.view",
+    "label": "携程旅行"
+  },
+  {
+    "package": "ctrip.english",
+    "label": "Trip.com"
+  },
+  {
+    "package": "de.danoeh.antennapod",
+    "label": "AntennaPod"
+  },
+  {
+    "package": "dji.go.v5",
+    "label": "DJI Fly"
+  },
+  {
+    "package": "gallery.photomanager.picturegalleryapp.imagegallery",
+    "label": "Gallery"
+  },
+  {
+    "package": "me.ele",
+    "label": "淘宝闪购"
+  },
+  {
+    "package": "net.cozic.joplin",
+    "label": "Joplin"
+  },
+  {
+    "package": "net.osmand",
+    "label": "OsmAnd"
+  },
+  {
+    "package": "org.fossify.calendar",
+    "label": "Calendar"
+  },
+  {
+    "package": "org.joinmastodon.android.mastodon",
+    "label": "Mastodon"
+  },
+  {
+    "package": "org.telegram.messenger",
+    "label": "Telegram"
+  },
+  {
+    "package": "org.videolan.vlc",
+    "label": "VLC"
+  },
+  {
+    "package": "org.zotero.android",
+    "label": "Zotero"
+  },
+  {
+    "package": "tv.danmaku.bili",
+    "label": "哔哩哔哩"
+  }
+]

@@ -177,6 +177,7 @@ def _device_command_config(monkeypatch):
                 platform="android",
                 auto_setup=False,
                 portal_mode="auto",
+                control_backend=None,
             )
         ),
     )

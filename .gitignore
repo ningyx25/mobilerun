@@ -43,3 +43,6 @@ reddit_python_posts.json
 test/
 # agent-test-flows generated run reports
 agent-test-flows/reports/
+
+# benchmark run artifacts
+runs/

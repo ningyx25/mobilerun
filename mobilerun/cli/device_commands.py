@@ -35,6 +35,18 @@ from mobilerun.agent.utils.android_device import (
 from mobilerun.agent.utils.portal_setup import portal_version_kwargs
 from mobilerun.config_manager import ConfigLoader
 from mobilerun.log_handlers import configure_logging
+from mobilerun.tools.driver.android_world import (
+    ANDROID_WORLD_CONNECTION,
+    ANDROID_WORLD_DEFAULT_URL,
+    AndroidWorldHttpDriver,
+    looks_like_android_world_url,
+)
+from mobilerun.tools.driver.mobile_world import (
+    MOBILE_WORLD_CONNECTION,
+    MOBILE_WORLD_DEFAULT_URL,
+    MobileWorldHttpDriver,
+    looks_like_mobile_world_url,
+)
 from mobilerun.tools.filters import ConciseFilter
 from mobilerun.tools.formatters import IndexedFormatter
 from mobilerun.tools.ui.ios_provider import IOSStateProvider
@@ -185,8 +197,31 @@ async def _create_driver(
         await driver.connect()
         return driver, True
 
+    # Docker environment servers: explicit control_backend, or an http(s) URL
+    # on the backend port convention (500* = AndroidWorld, 680* = MobileWorld).
+    # Portal URLs on other ports keep the Portal HTTP path.
+    control_backend = (config.device.control_backend or "").strip().lower()
+    serial_url = config.device.serial
+    is_mobile_world = control_backend == MOBILE_WORLD_CONNECTION or (
+        not control_backend and looks_like_mobile_world_url(serial_url)
+    )
+    if is_mobile_world:
+        url = serial_url or MOBILE_WORLD_DEFAULT_URL
+        driver = MobileWorldHttpDriver(url=url)
+        await driver.connect()
+        return driver, False
+    if control_backend == ANDROID_WORLD_CONNECTION or (
+        not control_backend and looks_like_android_world_url(serial_url)
+    ):
+        url = serial_url or ANDROID_WORLD_DEFAULT_URL
+        driver = AndroidWorldHttpDriver(url=url)
+        await driver.connect()
+        return driver, False
+
     serial = config.device.serial
-    if is_portal_http_url(serial):
+    # Portal HTTP auto-routing only applies when no explicit backend is set:
+    # an explicit control_backend (e.g. visual-remote) must keep its own path.
+    if not control_backend and is_portal_http_url(serial):
         try:
             driver = create_android_portal_http_driver(
                 serial, config.device.resolve_auth_token()
