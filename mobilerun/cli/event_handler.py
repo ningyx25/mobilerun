@@ -22,6 +22,12 @@ from mobilerun.agent.executor.events import (
     ExecutorActionEvent,
     ExecutorActionResultEvent,
 )
+from mobilerun.agent.executor.grounded_events import (
+    GroundedActionResultEvent,
+    GroundedContextEvent,
+    GroundedDecisionEvent,
+    GroundedPointEvent,
+)
 from mobilerun.agent.fast_agent.events import (
     FastAgentEndEvent,
     FastAgentInputEvent,
@@ -115,6 +121,48 @@ class EventHandler:
 
         elif isinstance(event, ExecutorResultEvent):
             logger.debug("Step complete", extra={"color": "magenta"})
+
+        # ── Grounded executor events (operation + grounding models) ──
+        elif isinstance(event, GroundedContextEvent):
+            if event.error:
+                logger.debug(f"⚠️ {event.error}", extra={"color": "red"})
+
+        elif isinstance(event, GroundedDecisionEvent):
+            if event.error:
+                logger.debug(
+                    f"⚠️ Decision failed: {event.error}", extra={"color": "red"}
+                )
+            else:
+                detail = event.app_target
+                logger.debug(
+                    f"🧭 Operation: {event.operation}"
+                    + (f" ({detail})" if detail else ""),
+                    extra={"color": "cyan"},
+                )
+
+        elif isinstance(event, GroundedPointEvent):
+            if event.error:
+                logger.debug(f"⚠️ Grounding failed: {event.error}", extra={"color": "red"})
+            elif event.x is not None:
+                logger.debug(
+                    f"🎯 Grounded at ({event.x}, {event.y})", extra={"color": "cyan"}
+                )
+            elif event.swipe_start is not None and event.swipe_end is not None:
+                logger.debug(
+                    f"↔️ Swipe {event.swipe_start} -> {event.swipe_end}",
+                    extra={"color": "cyan"},
+                )
+            elif event.text_value is not None:
+                logger.debug(f"⌨️ Text: {event.text_value!r}", extra={"color": "cyan"})
+
+        elif isinstance(event, GroundedActionResultEvent):
+            if event.success:
+                logger.debug(f"✅ {event.summary}", extra={"color": "green"})
+            else:
+                error_msg = event.error or "Unknown error"
+                logger.debug(
+                    f"❌ {event.summary} ({error_msg})", extra={"color": "red"}
+                )
 
         # ── FastAgent events (direct mode, XML tool-calling) ────────
         elif isinstance(event, FastAgentInputEvent):

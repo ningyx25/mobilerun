@@ -6,6 +6,7 @@ from mobilerun.config_manager.config_manager import (
     DroidConfig,  # Legacy alias
     ExecutorConfig,
     FastAgentConfig,
+    SystemOneConfig,
     LLMProfile,
     LoggingConfig,
     ManagerConfig,
@@ -26,6 +27,7 @@ __all__ = [
     "FastAgentConfig",
     "ManagerConfig",
     "ExecutorConfig",
+    "SystemOneConfig",
     "AppCardConfig",
     "DeviceConfig",
     "TelemetryConfig",
