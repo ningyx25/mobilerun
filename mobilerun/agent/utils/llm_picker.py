@@ -1,7 +1,7 @@
 import inspect
 import logging
 from functools import wraps
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from llama_index.core.base.llms.types import (
     ChatMessage,
@@ -16,8 +16,11 @@ from mobilerun.agent.providers.anthropic import (
     ANTHROPIC_API_DEFAULT_MODEL,
     ANTHROPIC_MODELS_WITHOUT_FORCED_TOOL_CHOICE,
     ANTHROPIC_UNSUPPORTED_SAMPLING_PARAMS,
+    StreamUsage,
     anthropic_model_context_window,
     anthropic_model_omits_sampling_params,
+    collect_stream_usage,
+    record_stream_usage,
 )
 from mobilerun.agent.providers.grok import (
     GROK_API_DEFAULT_MODEL,
@@ -255,6 +258,8 @@ def _load_openai_responses(*, grok: bool = False, **kwargs: Any) -> LLM:
     _patch_responses_output_parser(OpenAIResponses)
 
     class MobilerunOpenAIResponses(OpenAIResponses):
+        supports_native_tool_calls: ClassVar[bool] = True
+
         @staticmethod
         def _validate_gpt6_reasoning(model: str, reasoning: object) -> None:
             if reasoning is None:
@@ -623,6 +628,23 @@ def _load_anthropic(**kwargs: Any) -> LLM:
     from llama_index.llms.anthropic import Anthropic
 
     class MobilerunAnthropic(Anthropic):
+        def __init__(self, **kwargs: Any) -> None:
+            super().__init__(**kwargs)
+            record_stream_usage(self._client.messages)
+            record_stream_usage(self._aclient.messages, is_async=True)
+
+        def stream_chat(self, messages: Any, **kwargs: Any) -> Any:
+            usage = StreamUsage()
+            with collect_stream_usage(usage):
+                response = super().stream_chat(messages, **kwargs)
+            return usage.track(response)
+
+        async def astream_chat(self, messages: Any, **kwargs: Any) -> Any:
+            usage = StreamUsage()
+            with collect_stream_usage(usage):
+                response = await super().astream_chat(messages, **kwargs)
+            return usage.atrack(response)
+
         @wraps(Anthropic._prepare_chat_with_tools)
         def _prepare_chat_with_tools(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
             # FunctionCallingProgram passes None by default, overwriting the
@@ -712,6 +734,20 @@ def _load_anthropic(**kwargs: Any) -> LLM:
         f"Initializing MobilerunAnthropic with kwargs: {list(filtered_kwargs.keys())}"
     )
     return MobilerunAnthropic(**filtered_kwargs)
+
+
+def _load_deepseek(**kwargs: Any) -> LLM:
+    from llama_index.llms.openai_like import OpenAILike
+
+    class MobilerunDeepSeek(OpenAILike):
+        supports_native_tool_calls: ClassVar[bool] = True
+        native_tool_api: ClassVar[str] = "chat_completions"
+
+    filtered_kwargs = {k: v for k, v in kwargs.items() if v is not None}
+    logger.debug(
+        f"Initializing MobilerunDeepSeek with kwargs: {list(filtered_kwargs.keys())}"
+    )
+    return MobilerunDeepSeek(**filtered_kwargs)
 
 
 def load_llm(provider_name: str, model: str | None = None, **kwargs: Any) -> LLM:
@@ -848,6 +884,7 @@ def load_llm(provider_name: str, model: str | None = None, **kwargs: Any) -> LLM
         if "base_url" in kwargs and "api_base" not in kwargs:
             kwargs["api_base"] = kwargs.pop("base_url")
         kwargs.setdefault("api_base", "https://api.deepseek.com")
+        return _load_deepseek(**kwargs)
 
     # --- Standard providers (inline dispatch) ---
     if provider_name == "OpenAIResponses":

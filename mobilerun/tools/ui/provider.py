@@ -11,6 +11,7 @@ import logging
 import time
 from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, List, Optional
 
+import httpx
 from mobilerun_core_local.driver.base import DeviceDisconnectedError
 
 from mobilerun.tools.helpers.coordinate import NORMALIZED_STATE_NOTE
@@ -39,9 +40,45 @@ _MAX_RETRIES = 7
 # With the schedule above, this fires after ~11s (1+2+3+5).
 _RECOVERY_AFTER_ATTEMPT = 5
 
+# A timed-out read means the device side is still working on the request we
+# just abandoned. Portal and WDA serve state one request at a time, so every
+# extra retry queues behind the stuck one. Give timeouts a single retry
+# (preceded by recovery), not the full schedule above.
+_MAX_TIMEOUT_ATTEMPTS = 2
+
+# Say we are waiting when one fetch takes longer than this. A slow app can
+# keep a state request busy for 15-30s, and that should not look like a hang.
+_SLOW_FETCH_NOTICE_S = 3.0
+
 # Portal's error when its accessibility service is not bound, e.g. after the
 # system force-stopped Portal. Waiting does not help, so recover right away.
 _A11Y_SERVICE_NOT_AVAILABLE = "Accessibility service not available"
+
+
+def _is_timeout(error: BaseException) -> bool:
+    """True when the device accepted the request but did not answer in time.
+
+    Connect and pool timeouts are excluded: those requests never reached the
+    device, so retrying them does not queue work behind a busy one.
+    """
+    return isinstance(error, (TimeoutError, httpx.ReadTimeout))
+
+
+async def _fetch_with_notice(
+    fetch: Callable[[], Awaitable[Dict[str, Any]]], notice: bool
+) -> Dict[str, Any]:
+    """Await *fetch*, logging once at INFO if it runs past the notice delay."""
+    if not notice:
+        return await fetch()
+    task = asyncio.ensure_future(fetch())
+    try:
+        done, _ = await asyncio.wait({task}, timeout=_SLOW_FETCH_NOTICE_S)
+    except BaseException:
+        task.cancel()
+        raise
+    if not done:
+        logger.info("Waiting for the UI state from the device...")
+    return await task
 
 
 async def fetch_state_with_retry(
@@ -57,8 +94,10 @@ async def fetch_state_with_retry(
         fetch: Async callable that returns the raw state dict from Portal.
         recovery: Optional async callable invoked once after *recovery_after*
             consecutive failures (e.g. restart accessibility service), or
-            after the first failure if Portal's service is not available.
-        max_retries: Total number of attempts before giving up.
+            after the first failure if Portal's service is not available,
+            or before the single retry of a timed-out fetch.
+        max_retries: Total number of attempts before giving up. Timeouts
+            stop after ``_MAX_TIMEOUT_ATTEMPTS`` timed-out attempts.
         retry_delays: Per-attempt delays. If shorter than max_retries - 1,
             the last value is reused for remaining delays.
         recovery_after: Trigger *recovery* after this many failures.
@@ -74,15 +113,23 @@ async def fetch_state_with_retry(
     delays = retry_delays or _RETRY_DELAYS
     last_error: Optional[Exception] = None
     recovery_attempted = False
+    slow_notice_logged = False
+    timeouts = 0
+    attempts = 0
 
     is_debug = logger.isEnabledFor(logging.DEBUG)
 
     for attempt in range(max_retries):
         try:
-            logger.debug(f"Getting state (attempt {attempt + 1}/{max_retries})")
+            attempts = attempt + 1
+            logger.debug(f"Getting state (attempt {attempts}/{max_retries})")
 
-            t0 = time.monotonic() if is_debug else 0
-            combined_data = await fetch()
+            t0 = time.monotonic()
+            try:
+                combined_data = await _fetch_with_notice(fetch, not slow_notice_logged)
+            finally:
+                if time.monotonic() - t0 >= _SLOW_FETCH_NOTICE_S:
+                    slow_notice_logged = True
 
             if is_debug:
                 elapsed = (time.monotonic() - t0) * 1000
@@ -102,7 +149,10 @@ async def fetch_state_with_retry(
             raise
         except Exception as e:
             last_error = e
-            is_last = attempt >= max_retries - 1
+            timed_out = _is_timeout(e)
+            if timed_out:
+                timeouts += 1
+            is_last = attempt >= max_retries - 1 or timeouts >= _MAX_TIMEOUT_ATTEMPTS
             delay = delays[attempt] if attempt < len(delays) else delays[-1]
 
             err_desc = str(e) or type(e).__name__
@@ -116,7 +166,7 @@ async def fetch_state_with_retry(
             if (
                 not recovery_attempted
                 and recovery is not None
-                and (attempt + 1 >= recovery_after or service_gone)
+                and (attempt + 1 >= recovery_after or service_gone or timed_out)
                 and not is_last
             ):
                 recovery_attempted = True
@@ -132,11 +182,12 @@ async def fetch_state_with_retry(
                 except Exception as rec_err:
                     logger.warning(f"Recovery action failed: {rec_err}")
 
-            if not is_last:
-                await asyncio.sleep(delay)
+            if is_last:
+                break
+            await asyncio.sleep(delay)
 
     last_desc = str(last_error) or type(last_error).__name__
-    error_msg = f"Failed to get state after {max_retries} attempts: {last_desc}"
+    error_msg = f"Failed to get state after {attempts} attempts: {last_desc}"
     logger.error(error_msg)
     raise Exception(error_msg) from last_error
 
@@ -256,15 +307,17 @@ class AndroidStateProvider(StateProvider):
         # instead of mapping model coordinates against a wrong screen size.
         self.requires_active_contract_for_coords = vision_enabled
 
-    async def _recover_portal(self) -> None:
-        """Restart Portal's accessibility service, TCP server and keyboard."""
+    def _portal_recovery(self) -> Optional[Callable[[], Awaitable[None]]]:
+        """Return Portal recovery, or None when there is no ADB device."""
         from mobilerun_core_local.driver.android import AndroidDriver
 
-        if not isinstance(self.driver, AndroidDriver):
-            return
+        if isinstance(self.driver, AndroidDriver) and self.driver.device is not None:
+            return self._recover_portal
+        return None
+
+    async def _recover_portal(self) -> None:
+        """Restart Portal's accessibility service, TCP server and keyboard."""
         device = self.driver.device
-        if device is None:
-            return
 
         from mobilerun_core_local.driver.android.portal import (
             PORTAL_PACKAGE_NAME,
@@ -316,7 +369,7 @@ class AndroidStateProvider(StateProvider):
     async def get_state(self) -> UIState:
         combined_data = await fetch_state_with_retry(
             fetch=self.driver.get_ui_tree,
-            recovery=self._recover_portal,
+            recovery=self._portal_recovery(),
         )
         return self._state_from_data(combined_data)
 

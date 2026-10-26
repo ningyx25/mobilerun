@@ -1,6 +1,6 @@
 [project]
 name = "mobilerun"
-version = "0.7.1"
+version = "0.7.2"
 description = "A framework for controlling mobile devices through LLM agents"
 authors = [{ name = "Niels Schmidt", email = "niels@droidrun.ai" }]
 dependencies = [
@@ -69,7 +69,7 @@ anthropic = [
 ]
 deepseek = []
 dev = [
-    "black==26.5.1",
+    "black==26.10.1",
     "ruff>=0.13.0",
     "mypy>=1.0.0",
     "pytest>=8.0.0",

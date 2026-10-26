@@ -6,8 +6,10 @@ and talk directly to the device driver.
 
 import asyncio
 import json
+import logging
 import os
 import re
+import sys
 import tempfile
 from functools import wraps
 from typing import Optional
@@ -26,10 +28,13 @@ from rich.console import Console
 
 from mobilerun.agent.utils.android_device import (
     AndroidDeviceSelectionError,
+    create_android_portal_http_driver,
+    is_portal_http_url,
     resolve_android_serial,
 )
 from mobilerun.agent.utils.portal_setup import portal_version_kwargs
 from mobilerun.config_manager import ConfigLoader
+from mobilerun.log_handlers import configure_logging
 from mobilerun.tools.driver.android_world import (
     ANDROID_WORLD_CONNECTION,
     ANDROID_WORLD_DEFAULT_URL,
@@ -100,7 +105,7 @@ def device_options(f):
     f = click.option(
         "--device",
         "-d",
-        help="Device serial/IP (local) or cloud device UUID "
+        help="Device serial/IP or Portal HTTP URL (local), or cloud device UUID "
         "(auto-detected when authenticated)",
         default=None,
     )(f)
@@ -215,6 +220,16 @@ async def _create_driver(
         return driver, False
 
     serial = config.device.serial
+    if is_portal_http_url(serial):
+        try:
+            driver = create_android_portal_http_driver(
+                serial, config.device.resolve_auth_token()
+            )
+        except ValueError as e:
+            raise click.ClickException(str(e)) from None
+        await driver.connect()
+        return driver, False
+
     if serial is None:
         try:
             serial = await resolve_android_serial()
@@ -235,6 +250,20 @@ async def _create_driver(
     )
     await driver.connect()
     return driver, False
+
+
+def _log_progress_to_stderr() -> None:
+    """Show INFO progress (e.g. a slow UI-state fetch) on stderr.
+
+    Without this, Python's last-resort handler drops everything below
+    WARNING, so a slow device looks like a silent hang. stdout stays
+    reserved for the command's output.
+    """
+    if logging.getLogger("mobilerun").handlers:
+        return
+    handler = logging.StreamHandler(sys.stderr)
+    handler.setFormatter(logging.Formatter("%(message)s"))
+    configure_logging(debug=False, handler=handler)
 
 
 async def _teardown_android(driver):
@@ -293,6 +322,7 @@ async def screenshot(device, config_path, tcp, ios, cloud, device_id, base_url):
 @coro
 async def ui(device, config_path, tcp, ios, cloud, device_id, base_url):
     """Print the UI accessibility tree with element bounds for targeting."""
+    _log_progress_to_stderr()
     driver, is_ios = await _create_driver(
         device, config_path, tcp, ios, cloud, device_id, base_url
     )

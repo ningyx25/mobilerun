@@ -69,6 +69,10 @@ def test_short_messages_are_unchanged(message: str) -> None:
     assert describe_error(RuntimeError(message)) == message
 
 
+def test_empty_messages_fall_back_to_the_error_type() -> None:
+    assert describe_error(httpx.ConnectTimeout("")) == "ConnectTimeout"
+
+
 @pytest.fixture
 def mobilerun_caplog(caplog):
     """caplog wired to the non-propagating "mobilerun" logger."""

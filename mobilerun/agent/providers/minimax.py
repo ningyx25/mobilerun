@@ -60,6 +60,8 @@ def apply_minimax_defaults(kwargs: dict[str, Any]) -> dict[str, Any]:
     extra_body = dict(additional_kwargs.get("extra_body") or {})
     extra_body.setdefault("reasoning_split", True)
     additional_kwargs["extra_body"] = extra_body
+    # Streams carry no usage unless it is requested.
+    additional_kwargs.setdefault("stream_options", {"include_usage": True})
     kwargs["additional_kwargs"] = additional_kwargs
     return kwargs
 

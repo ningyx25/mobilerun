@@ -118,3 +118,33 @@ def test_recover_portal_leaves_keyboard_alone_without_portal_keyboard():
 
     assert device.commands
     assert not any(cmd.startswith("ime ") for cmd in device.commands)
+
+
+def test_recovery_needs_an_adb_device():
+    provider, _ = _provider(keyboard=False)
+    assert provider._portal_recovery() == provider._recover_portal
+
+    provider.driver.device = None
+    assert provider._portal_recovery() is None
+
+    provider.driver = object()  # e.g. Portal HTTP driver
+    assert provider._portal_recovery() is None
+
+
+def test_state_read_without_recovery_does_not_report_one(caplog, monkeypatch):
+    events = []
+    other = {"error": "Parse Error", "message": "bad"}
+    monkeypatch.setattr(provider_module.logger, "propagate", True)
+    with caplog.at_level("INFO", logger="mobilerun"):
+        asyncio.run(
+            fetch_state_with_retry(
+                fetch=_fetch(other, SERVICE_GONE, STATE, events=events),
+                recovery=None,
+                retry_delays=[0],
+                recovery_after=1,
+            )
+        )
+    assert events == ["fetch", "fetch", "fetch"]
+    assert "get_state attempt 1 failed" in caplog.text
+    assert "recover" not in caplog.text.lower()
+    assert "re-enabling" not in caplog.text

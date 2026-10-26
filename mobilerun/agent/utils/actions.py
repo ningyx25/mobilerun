@@ -14,6 +14,7 @@ if TYPE_CHECKING:
 
 from mobilerun.agent.action_result import ActionResult
 from mobilerun.agent.oneflows.app_starter_workflow import AppStarter
+from mobilerun.agent.utils.errors import describe_error
 from mobilerun.tools.helpers.coordinate import NORMALIZED_MAX, to_normalized
 
 logger = logging.getLogger("mobilerun")
@@ -352,7 +353,8 @@ async def long_press_at(x: int, y: int, *, ctx: "ActionContext") -> ActionResult
         )
     except Exception as e:
         return ActionResult(
-            success=False, summary=f"Failed to long press at ({x}, {y}): {e}"
+            success=False,
+            summary=f"Failed to long press at ({x}, {y}): {describe_error(e)}",
         )
 
 
@@ -372,7 +374,9 @@ async def click_at(x: int, y: int, *, ctx: "ActionContext") -> ActionResult:
             summary=f"Tapped at {_summary_point(x, y, abs_x, abs_y, ctx=ctx)}",
         )
     except Exception as e:
-        return ActionResult(success=False, summary=f"Failed to tap at ({x}, {y}): {e}")
+        return ActionResult(
+            success=False, summary=f"Failed to tap at ({x}, {y}): {describe_error(e)}"
+        )
 
 
 async def click_area(
@@ -401,7 +405,9 @@ async def click_area(
             ),
         )
     except Exception as e:
-        return ActionResult(success=False, summary=f"Failed to tap area center: {e}")
+        return ActionResult(
+            success=False, summary=f"Failed to tap area center: {describe_error(e)}"
+        )
 
 
 async def type_text(
@@ -435,7 +441,9 @@ async def type_text(
                 success=False, summary="Failed to type text: input failed"
             )
     except Exception as e:
-        return ActionResult(success=False, summary=f"Failed to type text: {e}")
+        return ActionResult(
+            success=False, summary=f"Failed to type text: {describe_error(e)}"
+        )
 
 
 async def type_text_direct(
@@ -456,7 +464,9 @@ async def type_text_direct(
             )
         return ActionResult(success=False, summary="Failed to type text: input failed")
     except Exception as e:
-        return ActionResult(success=False, summary=f"Failed to type text: {e}")
+        return ActionResult(
+            success=False, summary=f"Failed to type text: {describe_error(e)}"
+        )
 
 
 async def system_button(button: str, *, ctx: "ActionContext") -> ActionResult:
@@ -527,7 +537,9 @@ async def swipe(
             ),
         )
     except Exception as e:
-        return ActionResult(success=False, summary=f"Failed to swipe: {e}")
+        return ActionResult(
+            success=False, summary=f"Failed to swipe: {describe_error(e)}"
+        )
 
 
 async def open_app(text: str, *, ctx: "ActionContext") -> ActionResult:

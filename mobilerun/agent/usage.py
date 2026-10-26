@@ -26,6 +26,7 @@ SUPPORTED_PROVIDERS = [
 
 PROVIDER_ALIASES = {
     "MobilerunAnthropic": "Anthropic",
+    "MobilerunDeepSeek": "OpenAILike",
     "MobilerunGoogleGenAI": "GoogleGenAI",
     "MobilerunOpenAIResponses": "OpenAIResponses",
     "openai_responses_llm": "OpenAIResponses",

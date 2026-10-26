@@ -125,7 +125,8 @@ def _summarize_html_page(
 
 def describe_error(error: BaseException, max_chars: int = _MAX_ERROR_CHARS) -> str:
     """Return ``str(error)`` with HTML error pages summarized and length capped."""
-    text = str(error)
+    # Timeouts such as httpx.ConnectTimeout often have no message.
+    text = str(error) or type(error).__name__
     status = http_status_code(error)
     # Only HTTP errors wrap a response body in an SDK prefix.
     summary = _summarize_html_page(
