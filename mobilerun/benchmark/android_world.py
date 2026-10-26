@@ -1130,7 +1130,15 @@ async def run_androidworld_benchmark(
                     ui_tree_before = await gather_ui_tree(driver)
                 handler = agent.run()
                 manager_answered = False
+                # Forward events to the CLI handler: agents that report each
+                # step only as events (Jev) would otherwise be silent here —
+                # the loop below feeds evidence, never the console. Imported
+                # lazily: mobilerun.cli imports this module at package level.
+                from mobilerun.cli.event_handler import EventHandler
+
+                event_handler = EventHandler()
                 async for event in handler.stream_events():
+                    event_handler.handle(event)
                     # Reasoning mode: the manager's final answer is the
                     # episode-completion signal (AndroidWorld's `done`).
                     if (
