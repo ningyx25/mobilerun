@@ -31,7 +31,13 @@ def _get_required_profiles(
         List of required profile names
     """
     if config.agent.reasoning:
-        profiles = ["manager", "executor", "app_opener"]
+        profiles = ["manager"]
+        # The grounded executor (executor.kind == "grounded") answers from
+        # the local decision models over /v1/systemone, not from an LLM
+        # profile, so no "executor" profile is required for it.
+        if config.agent.executor.kind == "llm":
+            profiles.append("executor")
+        profiles.append("app_opener")
     else:
         # Direct execution mode only needs FastAgent and helper agents
         profiles = ["fast_agent", "app_opener"]

@@ -107,8 +107,27 @@ custom paths are preserved.
 **ExecutorConfig**
 ```python
 ExecutorConfig(
-    vision=False,                                            # Enable screenshots
+    vision=False,                                            # Enable screenshots for the classic LLM executor
     system_prompt="config/prompts/executor/system.jinja2",   # Path to system prompt template
+    kind="llm",                                             # "llm" | "grounded"
+    systemone=SystemOneConfig(...),                          # Endpoints/models for grounded execution
+)
+```
+
+`kind="grounded"` replaces the tool-calling executor with TypeSafe SystemOne decision models. It requires `reasoning=True` and `vision_only=True`; configure the SystemOne gateway and model names with `SystemOneConfig`:
+
+```python
+from mobilerun import ExecutorConfig, SystemOneConfig
+
+ExecutorConfig(
+    kind="grounded",
+    systemone=SystemOneConfig(
+        base_url="http://localhost:8020",
+        operation_model="clef-flash",
+        grounding_model="gui-actor",
+        timeout_s=300.0,
+        max_image_pixels=0,  # 0 sends the raw screenshot without resizing
+    ),
 )
 ```
 
