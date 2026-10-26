@@ -1,0 +1,63 @@
+# Mobilerun benchmark config for the Jev agent (control_backend: android-world /
+# mobile-world). Runs TypeSafe Jev as the decision engine.
+#
+# Differences vs benchmark.yaml:
+#   - agent.name: jev            (selects JevAgent instead of FastAgent)
+#   - vision_only: false         (Jev REQUIRES the a11y tree; rejects true)
+#   - reasoning: false           (Jev ignores reasoning anyway, coerced to False)
+#   - llm_profiles: {}           (Jev needs no LLM; avoids loading one)
+#
+# runbench overrides: device.control_backend / device.serial from -d,
+# agent.max_steps from --steps (or 10 x complexity for androidworld, 50 mw).
+#
+# NOTE (blockers on this source tree):
+#   - JevAgent never sets shared_state.success -> benchmark gates every
+#     episode as not-finished -> gated_score 0. raw result.score still
+#     recorded. See stacklabs review for details.
+#   - TypeSafe api.typesafe.ai is 451 geoblocked from this host: run with
+#     HTTPS_PROXY=http://localhost:7897 (HTTP_PROXY too).
+
+_version: 7
+
+agent:
+  name: jev
+  reasoning: false
+  streaming: true
+  # Jev needs the accessibility tree; do NOT set this to true.
+  vision_only: false
+  after_sleep_action: 1.0
+  wait_for_stable_ui: 0.3
+  # Jev operates on a11y element indices / device px coordinates; this is ignored.
+  use_normalized_coordinates: false
+
+  jev:
+    model: jev-latest
+    min_confidence: 0.3
+    # Reads apiKeys.typesafe from the credential store (`mobilerun configure jev`).
+    api_key_source: file
+    base_url: https://api.typesafe.ai
+    timeout: 30.0
+
+  fast_agent:
+    vision: false
+    system_prompt: config/prompts/fast_agent/system.jinja2
+    user_prompt: config/prompts/fast_agent/user.jinja2
+  manager:
+    vision: false
+    system_prompt: null
+    stateless: false
+  # The grounded executor (executor.kind: grounded) is ignored by Jev; the field
+  # must still parse. default executor.kind is "llm".
+  executor:
+    vision: false
+    system_prompt: config/prompts/executor/system.jinja2
+  app_cards:
+    enabled: true
+    mode: local
+    app_cards_dir: config/app_cards
+    server_url: null
+    server_timeout: 2.0
+    server_max_retries: 2
+
+# Jev needs no LLM profiles; empty is fine.
+llm_profiles: {}
