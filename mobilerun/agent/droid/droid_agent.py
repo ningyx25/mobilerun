@@ -110,7 +110,7 @@ from mobilerun.tools.driver.android_world import (
     ANDROID_WORLD_CONNECTION,
     ANDROID_WORLD_DEFAULT_URL,
     AndroidWorldHttpDriver,
-    looks_like_http_url,
+    looks_like_android_world_url,
 )
 from mobilerun.tools.driver.mobile_world import (
     MOBILE_WORLD_CONNECTION,
@@ -709,7 +709,7 @@ class MobileAgent(Workflow):
         is_android_world = control_backend == ANDROID_WORLD_CONNECTION or (
             control_backend is None
             and not is_ios
-            and looks_like_http_url(serial)
+            and looks_like_android_world_url(serial)
             and not is_mobile_world
         )
         if control_backend is None and (is_android_world or is_mobile_world):

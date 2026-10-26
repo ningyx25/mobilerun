@@ -83,9 +83,12 @@ from mobilerun.macro.cli import macro_cli
 from mobilerun.telemetry import print_telemetry_message
 from mobilerun.tools.driver.android_world import (
     ANDROID_WORLD_CONNECTION,
-    looks_like_http_url,
+    looks_like_android_world_url,
 )
-from mobilerun.tools.driver.mobile_world import MOBILE_WORLD_CONNECTION
+from mobilerun.tools.driver.mobile_world import (
+    MOBILE_WORLD_CONNECTION,
+    looks_like_mobile_world_url,
+)
 
 # Suppress all warnings
 warnings.filterwarnings("ignore")
@@ -367,7 +370,8 @@ async def _cleanup_android_keyboard(
         platform == "ios"
         or control_backend
         in {VISUAL_REMOTE_CONNECTION, ANDROID_WORLD_CONNECTION, MOBILE_WORLD_CONNECTION}
-        or looks_like_http_url(config.device.serial)
+        or looks_like_android_world_url(config.device.serial)
+        or looks_like_mobile_world_url(config.device.serial)
     ):
         return
 

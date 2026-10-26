@@ -409,7 +409,7 @@ def _fake_config(**device_overrides) -> SimpleNamespace:
         auto_setup=True,
         portal_mode="auto",
         control_backend=None,
-        resolve_auth_token=lambda _url: None,
+        resolve_auth_token=lambda *a, **k: None,
     )
     for key, value in device_overrides.items():
         setattr(device, key, value)
