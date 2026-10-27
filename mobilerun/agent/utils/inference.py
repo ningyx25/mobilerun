@@ -67,12 +67,16 @@ async def acall_with_retries(
                     timeout=timeout,
                 )
 
-            # Validate response; a native tool call may have no text.
+            # A native tool call may have no text only when tools were sent.
             message = getattr(response, "message", None)
             if message is not None and (
                 getattr(message, "content", None)
-                or any(
-                    isinstance(b, ToolCallBlock) for b in getattr(message, "blocks", [])
+                or (
+                    chat_kwargs.get("tools")
+                    and any(
+                        isinstance(b, ToolCallBlock)
+                        for b in getattr(message, "blocks", [])
+                    )
                 )
             ):
                 if not stream and message.content:
