@@ -1,6 +1,6 @@
 [project]
 name = "mobilerun"
-version = "0.7.3"
+version = "0.7.4"
 description = "A framework for controlling mobile devices through LLM agents"
 authors = [{ name = "Niels Schmidt", email = "niels@droidrun.ai" }]
 dependencies = [
@@ -96,6 +96,9 @@ packages = ["mobilerun"]
 [project.scripts]
 mobilerun = "mobilerun.cli.main:cli"
 
+[tool.uv]
+override-dependencies = ["filelock>=4.2.1"]
+
 [tool.ruff]
 line-length = 100
 target-version = "py313"
@@ -112,75 +115,6 @@ select = [
     "B", # flake8-bugbear
 ]
 ignore = ["E501"]
-
-[[tool.pydoc-markdown.loaders]]
-type = "python"
-packages = ["mobilerun"]
-modules = ["mobilerun"]
-
-[[tool.pydoc-markdown.processors]]
-type = "filter"
-documented_only = false
-do_not_filter_modules = true
-skip_empty_modules = true
-
-[[tool.pydoc-markdown.processors]]
-type = "smart"
-
-[[tool.pydoc-markdown.processors]]
-type = "crossref"
-
-[tool.pydoc-markdown.renderer]
-type = "hugo"
-build_directory = "docs"
-content_directory = "v4/sdk"
-clean_render = true
-
-
-[tool.pydoc-markdown.renderer.markdown]
-classdef_with_decorators = false
-signature_with_decorators = false
-data_code_block = true
-descriptive_class_title = false
-render_module_header = false
-format_code_style = "facebook"
-add_module_prefix = false
-add_method_class_prefix = true
-
-header_level_by_type = { Module = 1, Class = 2, Method = 4, Function = 4, Variable = 4 }
-
-
-[[tool.pydoc-markdown.renderer.pages]]
-title = "DroidAgent"
-name = "droid-agent"
-contents = [
-    "mobilerun.agent.droid.droid_agent.MobileAgent",
-    "mobilerun.agent.droid.droid_agent.MobileAgent.__init__",
-    "mobilerun.agent.droid.droid_agent.MobileAgent.run",
-]
-
-[[tool.pydoc-markdown.renderer.pages]]
-title = "Tools"
-name = "base-tools"
-contents = [
-    "mobilerun.tools.tools.Tools.*",
-    "mobilerun.tools.tools.describe_tools",
-]
-
-[[tool.pydoc-markdown.renderer.pages]]
-title = "AdbTools"
-name = "adb-tools"
-contents = ["mobilerun.tools.adb.AdbTools.*"]
-
-[[tool.pydoc-markdown.renderer.pages]]
-title = "IOSTools"
-name = "ios-tools"
-contents = ["mobilerun.tools.ios.IOSTools.*"]
-
-[[tool.pydoc-markdown.renderer.pages]]
-title = "CloudTools"
-name = "cloud-tools"
-contents = ["mobilerun.tools.cloud.MobileRunTools.*"]
 
 [dependency-groups]
 dev = [
