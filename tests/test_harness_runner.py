@@ -387,3 +387,70 @@ def test_wait_healthy_requires_a_live_backend():
             return {"ok": True}
 
     assert asyncio.run(_wait_healthy(_Env(), _Agent(), timeout=0)) is False
+
+
+def test_run_aborts_when_services_do_not_recover(tmp_path, monkeypatch):
+    from mobilerun.harness.protocol import BackendInfo, HealthResponse
+
+    class _Env:
+        base_url = "http://env"
+
+        def __init__(self):
+            self.health_calls = 0
+            self.closed = False
+
+        async def health(self):
+            self.health_calls += 1
+            if self.health_calls == 1:
+                return HealthResponse(
+                    ok=True,
+                    backends=[
+                        BackendInfo(id="aw0", kind="android-world", state="ready")
+                    ],
+                )
+            raise ConnectionError("down")
+
+        async def list_tasks(self, backend=None):
+            return [
+                TaskSpec(id="Alpha#0", backend="aw0"),
+                TaskSpec(id="Beta#0", backend="aw0"),
+            ]
+
+        async def create_session(self, *args, **kwargs):
+            raise ConnectionError("down")
+
+        async def close(self):
+            self.closed = True
+
+    class _Agent:
+        base_url = "http://agent"
+
+        async def health(self):
+            return {"ok": True}
+
+        async def close(self):
+            return None
+
+    env = _Env()
+    agent = _Agent()
+    monkeypatch.setattr(runner_module, "EnvClient", lambda *a, **k: env)
+    monkeypatch.setattr(runner_module, "AgentClient", lambda *a, **k: agent)
+
+    output = tmp_path / "results.json"
+
+    async def scenario():
+        return await runner_module.run_harness_suite(
+            "http://env.test",
+            "http://agent.test",
+            output=str(output),
+            parallel=1,
+            health_timeout=0.0,
+            task_timeout=1.0,
+            capture_evidence=False,
+        )
+
+    assert asyncio.run(scenario()) is False
+    payload = json.loads(output.read_text())
+    # The failing task is recorded; the queued ones stay unrecorded for --resume.
+    assert [row["task_type"] for row in payload["tasks"]] == ["Alpha"]
+    assert "ConnectionError" in payload["tasks"][0]["error"]

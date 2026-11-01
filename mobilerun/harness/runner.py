@@ -143,10 +143,11 @@ async def _run_one(
     run_id: str = "",
     verbose: bool = False,
     debug: bool = False,
-) -> TaskResult:
-    """Run one task end to end and return its result row."""
+) -> tuple[TaskResult, bool]:
+    """Run one task end to end; return its row and whether the failure was infra."""
     task_type, _, idx_text = task.id.partition("#")
     task_idx = int(idx_text or 0)
+    infra_failure = False
     result = TaskResult(
         task_type=task_type,
         task_idx=task_idx,
@@ -251,8 +252,16 @@ async def _run_one(
             result.eval_reason = finished.eval_reason
     except ServiceError as exc:
         result.error = f"{exc.code}: {exc.message}"
+        infra_failure = exc.status_code >= 500 or exc.code in {
+            "backend_unavailable",
+            "capacity",
+        }
+    except ConnectionError as exc:
+        result.error = f"{type(exc).__name__}: {exc}"
+        infra_failure = True
     except Exception as exc:  # noqa: BLE001 - record and continue
         result.error = f"{type(exc).__name__}: {exc}"
+        infra_failure = isinstance(exc, OSError)
     finally:
         result.duration_s = time.monotonic() - started
         if progress_task is not None:
@@ -266,7 +275,7 @@ async def _run_one(
                 await env.delete_session(session_id)
             except Exception as exc:  # noqa: BLE001 - best effort
                 logger.warning("Deleting session %s failed: %s", session_id, exc)
-    return result
+    return result, infra_failure
 
 
 # Extra time the agent gets over the episode timeout before the harness gives
@@ -481,11 +490,16 @@ async def run_harness_suite(
         write_lock = asyncio.Lock()
         semaphore = asyncio.Semaphore(max(1, parallel))
         completed = 0
+        abort = asyncio.Event()
 
         async def _worker(task: TaskSpec) -> None:
             nonlocal completed
             async with semaphore:
-                result = await _run_with_capacity_retry(
+                if abort.is_set():
+                    # The run was aborted while this task was queued; leave it
+                    # unrecorded so --resume picks it up.
+                    return
+                result, infra_failure = await _run_with_capacity_retry(
                     task,
                     env=env,
                     agent=agent,
@@ -502,6 +516,19 @@ async def run_harness_suite(
                     verbose=verbose,
                     debug=bool(debug),
                 )
+            if infra_failure and not abort.is_set():
+                if not await _services_up(env, agent):
+                    # Same policy as runbench: probe, wait for recovery, and
+                    # abort the run if the services never come back.
+                    console.print(
+                        "[yellow]Connection failure; waiting for the server "
+                        "to recover ...[/]"
+                    )
+                    if not await _wait_healthy(env, agent, health_timeout):
+                        console.print(
+                            "[red]Server did not recover; aborting the run.[/]"
+                        )
+                        abort.set()
             key = result.key
             _write_episode_manifest(result, run_meta)
             results[key] = result
@@ -521,6 +548,8 @@ async def run_harness_suite(
             results[_task_key(task)] for task in selected if _task_key(task) in results
         ]
         _print_summary(ordered)
+        if abort.is_set():
+            return False
         # A run where every task failed is not a successful invocation.
         ran = [row for row in results.values() if row.run_id == run_meta["run_id"]]
         return not (ran and all(row.error is not None for row in ran))
@@ -534,15 +563,17 @@ async def run_harness_suite(
 
 async def _run_with_capacity_retry(
     task: TaskSpec, *, env: EnvClient, **kwargs: Any
-) -> TaskResult:
+) -> tuple[TaskResult, bool]:
     """Retry a task while the environment reports no free backend."""
     deadline = time.monotonic() + float(kwargs.get("task_timeout", 1000.0))
     while True:
-        result = await _run_one(task, env=env, **kwargs)
+        result, infra = await _run_one(task, env=env, **kwargs)
         if result.error is None or "capacity" not in result.error.lower():
-            return result
+            return result, infra
         if time.monotonic() >= deadline:
-            return result
+            # Nobody freed a backend in the whole task budget: treat it as an
+            # infrastructure failure so the suite can probe the services.
+            return result, True
         await asyncio.sleep(_CAPACITY_RETRY_S)
 
 
@@ -554,6 +585,20 @@ async def _list_tasks(
     except (ServiceError, ConnectionError) as exc:
         console.print(f"[red]Could not read the task list: {exc}[/]")
         return None
+
+
+async def _services_up(env: EnvClient, agent: AgentClient) -> bool:
+    """Whether both services can still do work (env needs a live backend)."""
+    try:
+        health = await env.health()
+        if not (health.ok and any(info.state != "down" for info in health.backends)):
+            return False
+    except Exception:  # noqa: BLE001 - an unreachable service is down
+        return False
+    try:
+        return bool((await agent.health()).get("ok"))
+    except Exception:  # noqa: BLE001 - an unreachable service is down
+        return False
 
 
 async def _wait_healthy(env: EnvClient, agent: AgentClient, timeout: float) -> bool:
