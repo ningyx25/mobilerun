@@ -79,6 +79,13 @@ class Session:
             self._require_running()
             if not fresh:
                 return self.observation
+            # A caller that reads a frame right after an action would get the
+            # pre-action screen; settle first (no-op for backends without
+            # stabilization support).
+            try:
+                await self.backend.stabilize()
+            except Exception as exc:  # noqa: BLE001 - best effort
+                logger.debug("stabilize before observe failed: %s", exc)
             self.observation = await self.backend.observe(seq=self.observation.seq + 1)
             return self.observation
 
@@ -346,6 +353,7 @@ class SessionRegistry:
             )
         # asyncio.Lock has no owner; the lease is released by delete()/TTL.
         await lease.acquire()
+        task: Optional[TaskSpec] = None
         try:
             task = await backend.prepare(
                 request.task_id,
@@ -360,11 +368,20 @@ class SessionRegistry:
             except Exception as exc:  # noqa: BLE001 - best effort
                 logger.debug("stabilize after prepare failed: %s", exc)
             observation = await backend.observe(seq=1)
-        except ProtocolError:
+        except BaseException as exc:
             lease.release()
-            raise
-        except Exception as exc:
-            lease.release()
+            if task is not None:
+                # The device was initialized; leave it in a clean state for
+                # the next episode instead of stacking task setups.
+                try:
+                    await backend.teardown(task)
+                except Exception as cleanup_exc:  # noqa: BLE001 - best effort
+                    logger.warning(
+                        "teardown after a failed session create failed: %s",
+                        cleanup_exc,
+                    )
+            if isinstance(exc, ProtocolError):
+                raise
             if isinstance(exc, (ConnectionError, OSError)):
                 raise ProtocolError(
                     503,

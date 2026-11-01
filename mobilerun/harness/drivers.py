@@ -201,10 +201,13 @@ class RemoteEnvDriver(DeviceDriver):
     async def _step(self, action: Action) -> StepResponse:
         await self.ensure_connected()
         async with self._action_lock:
-            self._step_index += 1
+            # Only advance after the environment accepted the step. If the
+            # response is lost, the retry reuses the same index and the
+            # environment returns its cached response instead of a 409.
+            step_index = self._step_index + 1
             request = StepRequest(
                 action=action,
-                step_index=self._step_index,
+                step_index=step_index,
                 expect_seq=self._last_seq,
             )
             try:
@@ -217,6 +220,7 @@ class RemoteEnvDriver(DeviceDriver):
                 raise RuntimeError(
                     f"Environment rejected {action.op}: {exc.message}"
                 ) from exc
+            self._step_index = step_index
             self._remember(response.observation)
             if response.observation is None:
                 self._last_seq = response.seq

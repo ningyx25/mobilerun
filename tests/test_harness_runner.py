@@ -115,6 +115,8 @@ def test_suite_runs_every_task_and_writes_comparable_results(tmp_path, monkeypat
         assert row["finished"] is True
         assert row["steps"] == 2
         assert row["error"] is None
+        # runbench rows carry the invocation id; the runs[] record counts them.
+        assert row["run_id"] == payload["run_id"]
     assert backend.prepared == ["Alpha", "Beta"]
     assert backend.teardowns == ["Alpha#0", "Beta#0"]
 
@@ -247,6 +249,8 @@ def test_episode_manifest_is_written_after_scoring(tmp_path):
         "total_tokens": 3,
         "requests": 4,
     }
+    # The row carries the request count too, so the file summary can sum it.
+    assert result.usage_totals["requests"] == 4
     assert manifest["conversation_path"] == "conversation.json"
     assert manifest["timeline_path"] == "timeline.json"
     assert manifest["ui_tree_paths"] == ["ui_tree_before.json"]
@@ -325,12 +329,30 @@ def test_episode_events_render_like_runbench(capsys):
     _render_episode_event(
         "Task", {"type": "agent_end", "data": {"success": True, "reason": "finished"}}
     )
+    # The mobilerun worker forwards workflow class names instead.
+    _render_episode_event(
+        "Task",
+        {
+            "type": "FastAgentResponseEvent",
+            "data": {"thought": "weigh options", "code": "<function_calls/>"},
+        },
+    )
+    _render_episode_event(
+        "Task", {"type": "FastAgentOutputEvent", "data": {"output": "Error: boom"}}
+    )
+    _render_episode_event(
+        "Task",
+        {"type": "FastAgentEndEvent", "data": {"success": False, "reason": "nope"}},
+    )
 
     out = capsys.readouterr().out
     assert "🧠 Thinking: look at the screen" in out
     assert "💻 Executing action code" in out
     assert "❌ Action error: boom" in out
     assert "■ done: finished" in out
+    assert "🧠 Thinking: weigh options" in out
+    assert "❌ Action error: Error: boom" in out
+    assert "■ failed: nope" in out
 
 
 def test_goal_line_matches_runbench(capsys):
@@ -343,3 +365,25 @@ def test_goal_line_matches_runbench(capsys):
     out = capsys.readouterr().out
     assert "🎉 Goal achieved: ok" in out
     assert "❌ Goal failed: nope" in out
+
+
+def test_wait_healthy_requires_a_live_backend():
+    from mobilerun.harness.protocol import BackendInfo, HealthResponse
+    from mobilerun.harness.runner import _wait_healthy
+
+    class _Env:
+        base_url = "http://env"
+
+        async def health(self):
+            return HealthResponse(
+                ok=True,
+                backends=[BackendInfo(id="aw0", kind="android-world", state="down")],
+            )
+
+    class _Agent:
+        base_url = "http://agent"
+
+        async def health(self):
+            return {"ok": True}
+
+    assert asyncio.run(_wait_healthy(_Env(), _Agent(), timeout=0)) is False

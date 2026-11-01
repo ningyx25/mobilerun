@@ -140,6 +140,7 @@ async def _run_one(
     evidence_root: Optional[Path],
     backend: Optional[str],
     agent_id: Optional[str] = None,
+    run_id: str = "",
     verbose: bool = False,
     debug: bool = False,
 ) -> TaskResult:
@@ -151,6 +152,7 @@ async def _run_one(
         task_idx=task_idx,
         difficulty=str(task.metadata.get("difficulty", "")),
         timestamp=datetime.now().isoformat(timespec="seconds"),
+        run_id=run_id,
         server_url=str(env.base_url),
         agent_id=agent_id or "",
     )
@@ -166,7 +168,10 @@ async def _run_one(
             # backend in the catalogue and serialise parallel runs.
             backend=backend,
             task_idx=task_idx,
-            seed=seed,
+            # The suite seed is applied once before the loop. Passing it per
+            # session makes AndroidWorldBackend.prepare reinitialize the whole
+            # suite for every task.
+            seed=None,
         )
         session_id = session.session_id
         result.goal = session.task.instruction
@@ -235,14 +240,15 @@ async def _run_one(
                     "total_tokens": run.usage.total_tokens,
                 }
 
-        finished = await env.finish(
-            session_id,
-            declared_done=bool(run.declared_done) if run is not None else False,
-            answer=run.answer if run is not None else None,
-        )
-        result.score = finished.score
-        result.gated_score = finished.gated_score
-        result.eval_reason = finished.eval_reason
+        if result.error is None:
+            finished = await env.finish(
+                session_id,
+                declared_done=bool(run.declared_done) if run is not None else False,
+                answer=run.answer if run is not None else None,
+            )
+            result.score = finished.score
+            result.gated_score = finished.gated_score
+            result.eval_reason = finished.eval_reason
     except ServiceError as exc:
         result.error = f"{exc.code}: {exc.message}"
     except Exception as exc:  # noqa: BLE001 - record and continue
@@ -366,7 +372,9 @@ async def run_harness_suite(
         except Exception as exc:  # noqa: BLE001 - provenance is best effort
             logger.debug("Could not read the agent's health block: %s", exc)
 
-        catalogue = await env.list_tasks(backend=backend)
+        catalogue = await _list_tasks(env, backend)
+        if catalogue is None:
+            return False
         if not catalogue:
             console.print("[red]The environment returned an empty task list.[/]")
             return False
@@ -405,12 +413,16 @@ async def run_harness_suite(
                 # A suite seed has to be applied to every device, otherwise
                 # tasks run on the other backends use a different instance set.
                 targets = [info.id for info in (await env.health()).backends]
-            for target in targets:
-                await env.reinitialize(
-                    target,
-                    seed=seed,
-                    n_task_combinations=n_task_combinations,
-                )
+            try:
+                for target in targets:
+                    await env.reinitialize(
+                        target,
+                        seed=seed,
+                        n_task_combinations=n_task_combinations,
+                    )
+            except (ServiceError, ConnectionError) as exc:
+                console.print(f"[red]Could not reinitialize the suite: {exc}[/]")
+                return False
 
         overrides = AgentOverrides(
             provider=provider,
@@ -428,7 +440,16 @@ async def run_harness_suite(
             previous_meta = _load_run_meta(output_path)
             changed = [
                 field
-                for field in ("env_url", "agent_url", "provider", "model", "backend")
+                for field in (
+                    "env_url",
+                    "agent_url",
+                    "agent_id",
+                    "provider",
+                    "model",
+                    "backend",
+                    "seed",
+                    "n_task_combinations",
+                )
                 if previous_meta.get(field) != run_meta.get(field)
             ]
             if changed:
@@ -475,8 +496,9 @@ async def run_harness_suite(
                     seed=seed,
                     evidence=capture_evidence,
                     evidence_root=evidence_root,
-                    backend=None if parallel > 1 else backend,
+                    backend=backend,
                     agent_id=agent_id,
+                    run_id=run_meta.get("run_id") or "",
                     verbose=verbose,
                     debug=bool(debug),
                 )
@@ -499,7 +521,9 @@ async def run_harness_suite(
             results[_task_key(task)] for task in selected if _task_key(task) in results
         ]
         _print_summary(ordered)
-        return True
+        # A run where every task failed is not a successful invocation.
+        ran = [row for row in results.values() if row.run_id == run_meta["run_id"]]
+        return not (ran and all(row.error is not None for row in ran))
     except asyncio.CancelledError:
         console.print("\n[yellow]⏹️ Harness interrupted; partial results were kept.[/]")
         raise
@@ -522,6 +546,16 @@ async def _run_with_capacity_retry(
         await asyncio.sleep(_CAPACITY_RETRY_S)
 
 
+async def _list_tasks(
+    env: EnvClient, backend: Optional[str]
+) -> Optional[List[TaskSpec]]:
+    try:
+        return await env.list_tasks(backend=backend)
+    except (ServiceError, ConnectionError) as exc:
+        console.print(f"[red]Could not read the task list: {exc}[/]")
+        return None
+
+
 async def _wait_healthy(env: EnvClient, agent: AgentClient, timeout: float) -> bool:
     console.print(
         f"⏳ Waiting for services (env={env.base_url}, agent={agent.base_url}) ..."
@@ -530,7 +564,12 @@ async def _wait_healthy(env: EnvClient, agent: AgentClient, timeout: float) -> b
     while True:
         env_ok = agent_ok = False
         try:
-            env_ok = bool((await env.health()).ok)
+            env_health = await env.health()
+            # ``ok`` alone is unconditional; a service whose every backend is
+            # down cannot run anything.
+            env_ok = bool(env_health.ok) and any(
+                info.state != "down" for info in env_health.backends
+            )
         except Exception:  # noqa: BLE001 - reported by the loop
             env_ok = False
         try:
@@ -571,6 +610,11 @@ def _write_episode_manifest(result: TaskResult, run_meta: Dict[str, Any]) -> Non
         try:
             timeline = json.loads((bundle / "timeline.json").read_text())
             usage_totals = timeline.get("usage_totals") or usage_totals
+            if result.usage_totals is not None:
+                # runbench rows carry the request count too; the summary sums it.
+                result.usage_totals["requests"] = int(
+                    (usage_totals or {}).get("requests", 0)
+                )
         except Exception:  # noqa: BLE001 - evidence is best effort
             pass
 
@@ -648,13 +692,17 @@ async def _stream_episode_progress(
 
 
 def _render_episode_event(label: str, event: Dict[str, Any]) -> None:
-    """Render one SSE frame with runbench's event vocabulary."""
+    """Render one SSE frame with runbench's event vocabulary.
+
+    Two agent services can sit behind ``--agent``: agent-harness emits the
+    harness names (``llm_response``/``action_result``/``agent_end``); the
+    mobilerun worker forwards workflow class names. Both are rendered here.
+    """
     kind = event.get("type")
     data = event.get("data") or {}
     prefix = f"[dim]{label}[/] "
-    if kind == "episode_started":
-        console.print(f"{prefix}[magenta]💬 Task input received...[/]")
-    elif kind == "llm_response":
+
+    if kind in ("llm_response", "FastAgentResponseEvent"):
         thought = str(data.get("thought") or "").strip()
         if thought:
             console.print(
@@ -664,9 +712,30 @@ def _render_episode_event(label: str, event: Dict[str, Any]) -> None:
         if code:
             console.print(f"{prefix}[yellow]💻 Executing action code[/]")
             console.print(f"{prefix}[blue]{escape(str(code))}[/]")
-    elif kind == "action_result":
+    elif kind == "ManagerPlanEvent":
+        thought = str(data.get("thought") or "").strip()
+        if thought:
+            console.print(
+                f"{prefix}[cyan]🧠 Thinking: {escape(_preview(thought, 150))}[/]"
+            )
+        subgoal = str(data.get("current_subgoal") or "").strip()
+        if subgoal:
+            console.print(
+                f"{prefix}[yellow]📋 Next step: {escape(_preview(subgoal, 150))}[/]"
+            )
+        answer = str(data.get("answer") or "").strip()
+        if answer:
+            console.print(
+                f"{prefix}[green]💬 Answer: {escape(_preview(answer, 200))}[/]"
+            )
+    elif kind in (
+        "action_result",
+        "ExecutorActionResultEvent",
+        "GroundedActionResultEvent",
+    ):
+        success = data.get("ok", data.get("success"))
         summary = str(data.get("summary") or "")
-        if data.get("ok"):
+        if success:
             console.print(
                 f"{prefix}[green]⚡ Action result: {escape(_preview(summary, 100))}[/]"
             )
@@ -675,7 +744,17 @@ def _render_episode_event(label: str, event: Dict[str, Any]) -> None:
             console.print(
                 f"{prefix}[red]❌ Action error: {escape(_preview(error, 100))}[/]"
             )
-    elif kind == "agent_end":
+    elif kind == "FastAgentOutputEvent":
+        output = str(data.get("output") or "")
+        if "Error" in output or "Exception" in output:
+            console.print(
+                f"{prefix}[red]❌ Action error: {escape(_preview(output, 100))}[/]"
+            )
+        else:
+            console.print(
+                f"{prefix}[green]⚡ Action result: {escape(_preview(output, 100))}[/]"
+            )
+    elif kind in ("agent_end", "FastAgentEndEvent"):
         ok = bool(data.get("success"))
         console.print(
             f"{prefix}[{'green' if ok else 'red'}]"

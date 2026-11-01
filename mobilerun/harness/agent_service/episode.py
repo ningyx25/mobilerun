@@ -66,6 +66,22 @@ def declared_done(
     return agent.shared_state.success is not None
 
 
+def ensure_embedded_agent(config: MobileConfig) -> None:
+    """Refuse external agents: they drive adb directly and bypass our driver.
+
+    runbench applies the same guard (``benchmark/android_world.py:868-876``);
+    without it the leased environment session is never used.
+    """
+    from mobilerun.agent.external import list_agents
+
+    if config.agent.name in list_agents():
+        raise RuntimeError(
+            f"agent '{config.agent.name}' is an external agent; it drives adb "
+            "directly and bypasses the injected harness driver. Use a built-in "
+            "mobilerun agent for evaluation."
+        )
+
+
 class EpisodeRuntime:
     """One running episode and everything observable about it."""
 
@@ -394,6 +410,7 @@ class EpisodeManager:
     # -- lifecycle ---------------------------------------------------------
 
     async def start(self) -> None:
+        ensure_embedded_agent(self.config)
         # Load the shared LLMs once; per-episode overrides load their own.
         if self.llms is None:
             self.llms = load_agent_llms(self.config)

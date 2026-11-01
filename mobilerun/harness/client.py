@@ -237,6 +237,10 @@ class EnvClient(_BaseServiceClient):
                 "/v1/sessions",
                 json_body=request.model_dump(mode="json"),
                 timeout=timeout,
+                # Creating a session is not idempotent: a retried timeout would
+                # leak a second leased backend (or leave the first one held
+                # until the session TTL). The caller retries at task level.
+                retry=False,
             )
         )
 

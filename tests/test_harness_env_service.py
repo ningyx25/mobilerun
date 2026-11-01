@@ -343,3 +343,49 @@ def test_stabilizes_before_each_readable_frame():
             },
         )
         assert backend.stabilize_count == 2
+
+
+def test_fresh_observe_stabilizes_before_reading():
+    backend = ScriptedBackend(tasks=["Alpha"])
+    with make_client(backend) as client:
+        session_id = client.post("/v1/sessions", json={"task_id": "Alpha"}).json()[
+            "session_id"
+        ]
+        backend.stabilize_count = 0
+        client.post(f"/v1/sessions/{session_id}/observe?fresh=true")
+        assert backend.stabilize_count == 1
+
+        backend.stabilize_count = 0
+        client.post(f"/v1/sessions/{session_id}/observe?fresh=false")
+        assert backend.stabilize_count == 0
+
+
+def test_failed_session_create_tears_down_the_prepared_task():
+    backend = _FlakyObserve(tasks=["Alpha"])
+    backend.fail_observations = True
+    with make_client(backend) as client:
+        response = client.post("/v1/sessions", json={"task_id": "Alpha"})
+
+    assert response.status_code == 503
+    assert backend.teardowns == ["Alpha#0"]
+
+
+class _NoStabilize(ScriptedBackend):
+    def capabilities(self):
+        return super().capabilities().model_copy(update={"supports_stabilize": False})
+
+
+def test_backends_without_stabilization_are_scored_once():
+    backend = _NoStabilize(tasks=["Alpha"], score=0.0)
+    with make_client(backend) as client:
+        session_id = client.post("/v1/sessions", json={"task_id": "Alpha"}).json()[
+            "session_id"
+        ]
+        backend.stabilize_count = 0
+        response = client.post(
+            f"/v1/sessions/{session_id}/finish", json={"declared_done": True}
+        )
+
+    assert response.status_code == 200
+    assert backend.stabilize_count == 0
+    assert backend.score_reads == 1

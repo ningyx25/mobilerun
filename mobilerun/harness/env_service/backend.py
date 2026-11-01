@@ -41,6 +41,11 @@ from mobilerun.tools.helpers.images import image_dimensions
 
 logger = logging.getLogger("mobilerun")
 
+#: MobileWorld tasks that need MCP or a human in the loop. runbench excludes
+#: them unless explicitly enabled (``benchmark/mobile_world.py::_is_gui_task``),
+#: and the built-in agent cannot complete them.
+_MOBILE_WORLD_NON_GUI_TAGS = frozenset({"agent-mcp", "agent-user-interaction"})
+
 
 class EnvBackend(ABC):
     """One device + one task family, addressable by the environment service."""
@@ -405,16 +410,20 @@ class MobileWorldBackend(DriverBackend):
             name = str(entry.get("name") or "")
             if not name:
                 continue
+            tags = [str(tag) for tag in (entry.get("tags") or [])]
+            if _MOBILE_WORLD_NON_GUI_TAGS & set(tags):
+                # Parity with runbench's default task selection.
+                continue
             tasks.append(
                 TaskSpec(
                     id=name,
                     backend=self.id,
                     instruction="",
                     max_steps=50,
-                    tags=[str(tag) for tag in (entry.get("tags") or [])],
+                    tags=tags,
                     metadata={
                         "apps": list(entry.get("apps") or []),
-                        "tags": list(entry.get("tags") or []),
+                        "tags": tags,
                     },
                 )
             )

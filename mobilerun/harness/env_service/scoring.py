@@ -50,11 +50,16 @@ async def finish_episode(
     if declared_done and answer:
         await backend.submit_answer(answer)
 
-    # 2 + 3. Settle, score, and re-check a zero once.
-    score, eval_reason = await _score(backend, settle_s)
-    if declared_done and not score:
+    # 2 + 3. Settle, score, and re-check a zero once. Both are AndroidWorld
+    # behaviours: MobileWorld exposes no stabilize endpoint and runbench scores
+    # it exactly once.
+    supports_stabilize = bool(
+        getattr(backend.capabilities(), "supports_stabilize", False)
+    )
+    score, eval_reason = await _score(backend, settle_s, supports_stabilize)
+    if supports_stabilize and declared_done and not score:
         await asyncio.sleep(_SCORE_RECHECK_DELAY_S)
-        rescored, rescore_reason = await _score(backend, settle_s)
+        rescored, rescore_reason = await _score(backend, settle_s, supports_stabilize)
         if rescored > score:
             score, eval_reason = rescored, rescore_reason or eval_reason
 
@@ -69,12 +74,15 @@ async def finish_episode(
     )
 
 
-async def _score(backend: EnvBackend, settle_s: Optional[float]) -> tuple[float, str]:
-    """Settle the screen (best effort), then read the score."""
+async def _score(
+    backend: EnvBackend, settle_s: Optional[float], supports_stabilize: bool
+) -> tuple[float, str]:
+    """Settle the screen (when the backend supports it), then read the score."""
     if settle_s:
         await asyncio.sleep(settle_s)
-    try:
-        await backend.stabilize()
-    except Exception as exc:  # noqa: BLE001 - best effort
-        logger.warning("stabilize before scoring failed: %s", exc)
+    if supports_stabilize:
+        try:
+            await backend.stabilize()
+        except Exception as exc:  # noqa: BLE001 - best effort
+            logger.warning("stabilize before scoring failed: %s", exc)
     return await backend.evaluate()

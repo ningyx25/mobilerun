@@ -269,3 +269,14 @@ def test_policy_routes_are_declared_but_not_implemented(method, path, payload):
         response = call(path, json=payload) if payload is not None else call(path)
         assert response.status_code == 501
         assert response.json()["code"] == "not_implemented"
+
+
+def test_external_agents_are_refused(monkeypatch):
+    from mobilerun.config_manager.config_manager import MobileConfig
+    from mobilerun.harness.agent_service.episode import ensure_embedded_agent
+
+    monkeypatch.setattr("mobilerun.agent.external.list_agents", lambda: ["my-external"])
+    config = MobileConfig()
+    config.agent.name = "my-external"
+    with pytest.raises(RuntimeError, match="external agent"):
+        ensure_embedded_agent(config)
