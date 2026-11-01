@@ -312,3 +312,34 @@ def test_observe_maps_a_disconnect_to_503():
 
     assert response.status_code == 503
     assert response.json()["code"] == "backend_unavailable"
+
+
+def test_stabilizes_before_each_readable_frame():
+    backend = ScriptedBackend(tasks=["Alpha"])
+    with make_client(backend) as client:
+        session_id = client.post("/v1/sessions", json={"task_id": "Alpha"}).json()[
+            "session_id"
+        ]
+        # reset() leaves the UI mid-transition: the first frame waits for it.
+        assert backend.stabilize_count == 1
+
+        client.post(
+            f"/v1/sessions/{session_id}/step",
+            json={
+                "action": {"op": "tap", "args": {"x": 1, "y": 2}},
+                "step_index": 1,
+                "include_observation": True,
+            },
+        )
+        # The post-action frame must be taken after the UI settled.
+        assert backend.stabilize_count == 2
+
+        client.post(
+            f"/v1/sessions/{session_id}/step",
+            json={
+                "action": {"op": "tap", "args": {"x": 1, "y": 2}},
+                "step_index": 2,
+                "include_observation": False,
+            },
+        )
+        assert backend.stabilize_count == 2

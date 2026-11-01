@@ -149,6 +149,13 @@ class Session:
                 # the step-index guard). Report the action result and let the
                 # caller read the frame with a retried /observe.
                 try:
+                    # Wait for the UI to settle first: an immediate screenshot
+                    # is the previous frame, which makes the model believe its
+                    # action did nothing (and the evidence frames repeat).
+                    await self.backend.stabilize()
+                except Exception as exc:  # noqa: BLE001 - best effort
+                    logger.debug("stabilize after action failed: %s", exc)
+                try:
                     self.observation = await self.backend.observe(
                         seq=self.observation.seq + 1
                     )
@@ -346,6 +353,12 @@ class SessionRegistry:
                 seed=request.seed,
                 params=request.params,
             )
+            # ``reset`` leaves the UI mid-transition; the official runner's
+            # first observation waits for it to settle.
+            try:
+                await backend.stabilize()
+            except Exception as exc:  # noqa: BLE001 - best effort
+                logger.debug("stabilize after prepare failed: %s", exc)
             observation = await backend.observe(seq=1)
         except ProtocolError:
             lease.release()
