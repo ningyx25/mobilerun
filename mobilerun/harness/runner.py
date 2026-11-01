@@ -53,6 +53,7 @@ console = Console()
 
 _BENCHMARK_NAME = "harness"
 _CAPACITY_RETRY_S = 5.0
+_HEARTBEAT_S = 60.0
 
 
 # ---------------------------------------------------------------------------
@@ -432,24 +433,33 @@ async def run_harness_suite(
         write_lock = asyncio.Lock()
         semaphore = asyncio.Semaphore(max(1, parallel))
         completed = 0
+        running: Dict[str, tuple[str, float]] = {}
 
         async def _worker(task: TaskSpec) -> None:
             nonlocal completed
             async with semaphore:
-                result = await _run_with_capacity_retry(
-                    task,
-                    env=env,
-                    agent=agent,
-                    agent_env_url=agent_env_url_override,
-                    overrides=overrides,
-                    steps=steps,
-                    task_timeout=task_timeout,
-                    seed=seed,
-                    evidence=capture_evidence,
-                    evidence_root=evidence_root,
-                    backend=None if parallel > 1 else backend,
-                    agent_id=agent_id,
+                key = _task_key(task)
+                running[key] = (task.id, time.monotonic())
+                console.print(
+                    f"[dim]▶ {task.id} " f"(budget {steps or task.max_steps} steps)[/]"
                 )
+                try:
+                    result = await _run_with_capacity_retry(
+                        task,
+                        env=env,
+                        agent=agent,
+                        agent_env_url=agent_env_url_override,
+                        overrides=overrides,
+                        steps=steps,
+                        task_timeout=task_timeout,
+                        seed=seed,
+                        evidence=capture_evidence,
+                        evidence_root=evidence_root,
+                        backend=None if parallel > 1 else backend,
+                        agent_id=agent_id,
+                    )
+                finally:
+                    running.pop(key, None)
             key = result.key
             results[key] = result
             async with write_lock:
@@ -457,7 +467,31 @@ async def run_harness_suite(
                 _write_results(output_path, run_meta, results, run_history)
                 _print_result_line(completed, len(pending), result)
 
-        await asyncio.gather(*(_worker(task) for task in pending))
+        async def _heartbeat() -> None:
+            """A long episode is otherwise silent; report what is in flight."""
+            while True:
+                await asyncio.sleep(_HEARTBEAT_S)
+                if not running:
+                    continue
+                now = time.monotonic()
+                parts = [
+                    f"{task_id} {_format_elapsed(now - started_at)}"
+                    for task_id, started_at in running.values()
+                ]
+                console.print(
+                    f"[dim]… {completed}/{len(pending)} done | "
+                    f"running: {', '.join(parts)}[/]"
+                )
+
+        heartbeat = asyncio.create_task(_heartbeat())
+        try:
+            await asyncio.gather(*(_worker(task) for task in pending))
+        finally:
+            heartbeat.cancel()
+            try:
+                await heartbeat
+            except asyncio.CancelledError:
+                pass
 
         run_meta["finished_at"] = datetime.now().isoformat(timespec="seconds")
         _write_results(output_path, run_meta, results, run_history)
@@ -516,6 +550,14 @@ async def _wait_healthy(env: EnvClient, agent: AgentClient, timeout: float) -> b
             )
             return False
         await asyncio.sleep(5.0)
+
+
+def _format_elapsed(seconds: float) -> str:
+    minutes, rest = divmod(int(seconds), 60)
+    if minutes >= 60:
+        hours, minutes = divmod(minutes, 60)
+        return f"{hours}h{minutes:02d}m"
+    return f"{minutes}m{rest:02d}s"
 
 
 def _print_result_line(index: int, total: int, result: TaskResult) -> None:
