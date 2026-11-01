@@ -71,6 +71,19 @@ def _select_tasks(
     """Filter the environment's task catalogue down to what to run."""
     selected = [task for task in tasks if backend is None or task.backend == backend]
 
+    if backend is None:
+        # ``/v1/tasks`` returns one copy per backend, each tagged with its own
+        # id. Without a pinned backend the copies are the same suite: keep one
+        # and let the environment lease whichever backend is free per session.
+        seen = set()
+        deduped = []
+        for task in selected:
+            if task.id in seen:
+                continue
+            seen.add(task.id)
+            deduped.append(task)
+        selected = deduped
+
     if task_index_range:
         start, end = _parse_task_index_range(task_index_range, len(selected))
         selected = selected[start - 1 : end]
@@ -142,7 +155,10 @@ async def _run_one(
     try:
         session = await env.create_session(
             task.id.partition("#")[0],
-            backend=backend or task.backend,
+            # ``None`` lets the environment lease any free backend. Falling
+            # back to ``task.backend`` here would pin every task to the first
+            # backend in the catalogue and serialise parallel runs.
+            backend=backend,
             task_idx=task_idx,
             seed=seed,
         )
@@ -350,18 +366,26 @@ async def run_harness_suite(
             table.add_column("Backend", style="green")
             table.add_column("Steps", style="white")
             for index, task in enumerate(selected, start=1):
-                table.add_row(str(index), task.id, task.backend, str(task.max_steps))
+                table.add_row(
+                    str(index), task.id, backend or "any free", str(task.max_steps)
+                )
             console.print(table)
             console.print(f"Results would be written to [cyan]{output_path}[/]")
             return True
 
         if seed is not None or n_task_combinations is not None:
-            effective_backend = backend or selected[0].backend
-            await env.reinitialize(
-                effective_backend,
-                seed=seed,
-                n_task_combinations=n_task_combinations,
-            )
+            if backend:
+                targets = [backend]
+            else:
+                # A suite seed has to be applied to every device, otherwise
+                # tasks run on the other backends use a different instance set.
+                targets = [info.id for info in (await env.health()).backends]
+            for target in targets:
+                await env.reinitialize(
+                    target,
+                    seed=seed,
+                    n_task_combinations=n_task_combinations,
+                )
 
         overrides = AgentOverrides(
             provider=provider,

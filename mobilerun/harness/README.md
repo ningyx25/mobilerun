@@ -173,7 +173,11 @@ uvicorn.run(app, host="0.0.0.0", port=9201)
 ```
 
 `--parallel N` runs N episodes concurrently; each needs its own backend, so
-leave `--backend` unset and let the environment pick a free one.
+leave `--backend` unset and let the environment pick a free one. Without a
+pinned backend the per-backend copies of the catalogue are de-duplicated, so a
+full run is the suite size, not suite size × devices; `--parallel` above the
+number of backends only causes capacity retries. `--seed` and
+`--n-task-combinations` apply to every backend in that mode.
 
 Results are written with the benchmark runner's own plumbing (`TaskResult`,
 `_write_results`, resume history), so a harness file is directly comparable to

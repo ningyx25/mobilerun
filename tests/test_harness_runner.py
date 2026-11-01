@@ -219,6 +219,24 @@ def test_select_tasks_filters_by_backend_range_and_name():
     assert [t.id for t in _select_tasks(catalogue, difficulty=["hard"])] == ["D#0"]
 
 
+def test_select_tasks_dedupes_backends_when_none_is_pinned():
+    catalogue = [
+        _task("A#0", "aw0"),
+        _task("B#0", "aw0"),
+        _task("A#0", "aw1"),
+        _task("B#0", "aw1"),
+    ]
+    assert [(t.id, t.backend) for t in _select_tasks(catalogue)] == [
+        ("A#0", "aw0"),
+        ("B#0", "aw0"),
+    ]
+
+
+def test_select_tasks_keeps_the_pinned_backend():
+    catalogue = [_task("A#0", "aw0"), _task("B#0", "aw1")]
+    assert [t.id for t in _select_tasks(catalogue, backend="aw1")] == ["B#0"]
+
+
 def test_select_tasks_rejects_unknown_names_and_empty_selection():
     catalogue = [_task("A#0")]
     with pytest.raises(ValueError, match="Unknown task"):
