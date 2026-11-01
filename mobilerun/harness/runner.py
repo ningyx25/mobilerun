@@ -272,6 +272,7 @@ async def run_harness_suite(
     health_timeout: float = 900.0,
     task_timeout: float = 1000.0,
     capture_evidence: bool = True,
+    evidence_dir: Optional[str] = None,
     provider: Optional[str] = None,
     model: Optional[str] = None,
     base_url: Optional[str] = None,
@@ -294,7 +295,11 @@ async def run_harness_suite(
             f"runs/{_BENCHMARK_NAME}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
         )
     output_path = Path(output)
-    evidence_root = output_path.parent / f"{output_path.stem}_evidence"
+    evidence_root = (
+        Path(evidence_dir)
+        if evidence_dir
+        else output_path.parent / f"{output_path.stem}_evidence"
+    )
 
     env = EnvClient(env_url, token=token)
     agent = AgentClient(agent_url, token=token)

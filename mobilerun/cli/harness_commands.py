@@ -225,6 +225,11 @@ def serve_agent(
 @click.option("--health-timeout", default=900.0, type=float)
 @click.option("--task-timeout", default=1000.0, type=float)
 @click.option("--evidence/--no-evidence", default=True)
+@click.option(
+    "--evidence-dir",
+    default=None,
+    help="Where episodes write evidence bundles (default: <output>_evidence)",
+)
 @click.option("--provider", default=None, help="LLM provider override")
 @click.option("--model", default=None, help="LLM model override")
 @click.option("--base-url", default=None, help="LLM base URL override")
@@ -262,6 +267,7 @@ async def eval_command(
     health_timeout: float,
     task_timeout: float,
     evidence: bool,
+    evidence_dir: str | None,
     provider: str | None,
     model: str | None,
     base_url: str | None,
@@ -293,6 +299,7 @@ async def eval_command(
         health_timeout=health_timeout,
         task_timeout=task_timeout,
         capture_evidence=evidence,
+        evidence_dir=evidence_dir,
         provider=provider,
         model=model,
         base_url=base_url,
