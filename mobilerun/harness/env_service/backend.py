@@ -18,6 +18,7 @@ I/O is reimplemented here.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional
@@ -241,15 +242,33 @@ class AndroidWorldBackend(DriverBackend):
 
     async def list_tasks(self) -> List[TaskSpec]:
         names = await self.client.task_list()
+        # AndroidWorld's catalogue endpoint carries no budget; the reference
+        # runner uses ``int(10 * task.complexity)`` per instance. Ask the
+        # server so the catalogue shows the real per-task budget instead of a
+        # flat placeholder.
+        semaphore = asyncio.Semaphore(8)
+
+        async def complexity(name: str) -> Optional[float]:
+            async with semaphore:
+                try:
+                    return await self.client.get_complexity(name, 0)
+                except Exception as exc:  # noqa: BLE001 - catalogue is best effort
+                    logger.debug("Could not read complexity for %s: %s", name, exc)
+                    return None
+
+        complexities = await asyncio.gather(*(complexity(name) for name in names))
         tasks: List[TaskSpec] = []
-        for name in names:
+        for name, value in zip(names, complexities, strict=True):
             meta = self._metadata.get(name, {})
             tasks.append(
                 TaskSpec(
                     id=name,
                     backend=self.id,
                     instruction="",
-                    max_steps=50,
+                    # Nominal budget for instance 0; prepare() recomputes the
+                    # exact value for the instance it initializes.
+                    max_steps=int(10 * value) if value is not None else 50,
+                    complexity=value,
                     metadata=dict(meta),
                 )
             )
