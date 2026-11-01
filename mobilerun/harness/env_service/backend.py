@@ -307,13 +307,28 @@ class AndroidWorldBackend(DriverBackend):
             )
 
         await self.client.initialize_task(task_id, task_idx)
-        goal = await self.client.get_goal(task_id, task_idx)
-        complexity = await self.client.get_complexity(task_id, task_idx)
-        start_on_home = await self.client.start_on_home_screen(task_id, task_idx)
-        # Fresh episode: reset with go_home mirroring the task's
-        # start_on_home_screen, exactly like the reference runner's
-        # agent.reset(start_on_home_screen).
-        await self.client.reset(go_home=start_on_home)
+        # runbench tears the task down in a finally-block once initialize
+        # succeeded; mirror that here so a failure in goal/reset does not
+        # leave the task initialized (the next attempt would hit the
+        # server's "initialize_task() is already called" guard).
+        try:
+            goal = await self.client.get_goal(task_id, task_idx)
+            complexity = await self.client.get_complexity(task_id, task_idx)
+            start_on_home = await self.client.start_on_home_screen(
+                task_id, task_idx
+            )
+            # Fresh episode: reset with go_home mirroring the task's
+            # start_on_home_screen, exactly like the reference runner's
+            # agent.reset(start_on_home_screen).
+            await self.client.reset(go_home=start_on_home)
+        except BaseException:
+            try:
+                await self.client.tear_down(task_id, task_idx)
+            except Exception as exc:  # noqa: BLE001 - best effort
+                logger.warning(
+                    "tear_down after a failed prepare failed: %s", exc
+                )
+            raise
 
         meta = dict(self._metadata.get(task_id, {}))
         meta.update({"task_type": task_id, "task_idx": task_idx})
