@@ -144,10 +144,21 @@ class Session:
                 error=error,
             )
             if request.include_observation and not action.is_terminal:
-                self.observation = await self.backend.observe(
-                    seq=self.observation.seq + 1
-                )
-                response.observation = self.observation
+                # The action already ran; a failed post-action read must not
+                # turn the step into a 500 (the client would retry it and hit
+                # the step-index guard). Report the action result and let the
+                # caller read the frame with a retried /observe.
+                try:
+                    self.observation = await self.backend.observe(
+                        seq=self.observation.seq + 1
+                    )
+                    response.observation = self.observation
+                except Exception as exc:  # noqa: BLE001 - action already applied
+                    logger.warning(
+                        "Post-action observation on session %s failed: %s",
+                        self.id,
+                        exc,
+                    )
 
             self._remember(response)
             return response

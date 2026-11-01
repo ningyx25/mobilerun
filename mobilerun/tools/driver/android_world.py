@@ -17,6 +17,7 @@ the full tree-based toolset (indexed click/type, element filtering) works.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import io
 import logging
@@ -138,7 +139,14 @@ class AndroidWorldHttpDriver(DeviceDriver):
         if self._connected:
             return
         self._client = httpx.AsyncClient(
-            base_url=self.url, timeout=self.timeout, transport=self.transport
+            base_url=self.url,
+            timeout=self.timeout,
+            transport=self.transport,
+            # The server closes idle keep-alive connections (uvicorn's 5 s
+            # default) while steps are minutes apart. Reusing such a socket
+            # races the close and fails with RemoteProtocolError, so pooling
+            # is disabled; a fresh local connection is cheap.
+            limits=httpx.Limits(max_keepalive_connections=0),
         )
         try:
             response = await self._client.get("/health")
@@ -212,9 +220,17 @@ class AndroidWorldHttpDriver(DeviceDriver):
         self, path: str, *, params: dict | None = None, timeout: float | None = None
     ) -> Any:
         await self.ensure_connected()
-        response = await self._http.get(
-            path, params=params, timeout=timeout or self.timeout
-        )
+        # GETs are reads: one retry on a dropped connection is safe.
+        for attempt in (1, 2):
+            try:
+                response = await self._http.get(
+                    path, params=params, timeout=timeout or self.timeout
+                )
+                break
+            except httpx.RemoteProtocolError:
+                if attempt == 2:
+                    raise
+                await asyncio.sleep(0.2)
         self._raise_for_status(response)
         return response.json()
 
@@ -225,11 +241,21 @@ class AndroidWorldHttpDriver(DeviceDriver):
         params: dict | None = None,
         json: Any = None,
         timeout: float | None = None,
+        retry: bool = False,
     ) -> Any:
         await self.ensure_connected()
-        response = await self._http.post(
-            path, params=params, json=json, timeout=timeout or self.timeout
-        )
+        for attempt in (1, 2):
+            try:
+                response = await self._http.post(
+                    path, params=params, json=json, timeout=timeout or self.timeout
+                )
+                break
+            except httpx.RemoteProtocolError:
+                # Only read-only POSTs (screenshot/state) opt into a retry:
+                # an input action may already have been applied.
+                if not retry or attempt == 2:
+                    raise
+                await asyncio.sleep(0.2)
         self._raise_for_status(response)
         return response.json()
 
@@ -418,7 +444,10 @@ class AndroidWorldHttpDriver(DeviceDriver):
 
     async def screenshot(self, hide_overlay: bool = True) -> bytes:
         data = await self._post(
-            "/screenshot", params={"wait_to_stabilize": False}, timeout=_STATE_TIMEOUT
+            "/screenshot",
+            params={"wait_to_stabilize": False},
+            timeout=_STATE_TIMEOUT,
+            retry=True,
         )
         image_bytes = base64.b64decode(data["image_b64"])
         with Image.open(io.BytesIO(image_bytes)) as image:
@@ -429,7 +458,10 @@ class AndroidWorldHttpDriver(DeviceDriver):
     async def get_ui_tree(self) -> Dict[str, Any]:
         """Fetch /state and convert it to the portal-shaped state dict."""
         data = await self._post(
-            "/state", params={"wait_to_stabilize": False}, timeout=_STATE_TIMEOUT
+            "/state",
+            params={"wait_to_stabilize": False},
+            timeout=_STATE_TIMEOUT,
+            retry=True,
         )
         elements = [e for e in (data.get("ui_elements") or []) if isinstance(e, dict)]
         image_bytes = base64.b64decode(data.get("image_b64") or "")

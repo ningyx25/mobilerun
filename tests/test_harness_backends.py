@@ -4,8 +4,12 @@ from __future__ import annotations
 
 import asyncio
 
+import httpx
+import pytest
+
 import mobilerun.harness.env_service.backend as backend_module
 from mobilerun.benchmark import android_world as aw
+from mobilerun.harness.protocol import ErrorCode, ProtocolError
 
 
 class _FakeDriver:
@@ -43,3 +47,33 @@ def test_android_world_catalogue_uses_each_task_complexity(monkeypatch):
         ("Hard", 2.8, 28),
         ("Broken", None, 50),
     ]
+
+
+class _DisconnectingDriver:
+    """A driver whose device server drops the connection."""
+
+    supported = {"tap"}
+
+    async def screenshot(self):
+        raise httpx.RemoteProtocolError(
+            "Server disconnected without sending a response"
+        )
+
+
+class _ObserveBackend(backend_module.DriverBackend):
+    async def list_tasks(self):
+        return []
+
+    async def prepare(self, task_id, **kwargs):
+        raise NotImplementedError
+
+    async def evaluate(self):
+        return 0.0, ""
+
+
+def test_observe_maps_a_transport_error_to_a_retryable_503():
+    backend = _ObserveBackend("aw0", _DisconnectingDriver())
+    with pytest.raises(ProtocolError) as caught:
+        asyncio.run(backend.observe(seq=1))
+    assert caught.value.status_code == 503
+    assert caught.value.code is ErrorCode.BACKEND_UNAVAILABLE

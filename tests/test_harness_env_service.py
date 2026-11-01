@@ -5,6 +5,7 @@ from fastapi.testclient import TestClient
 
 from mobilerun.harness.env_service import scoring
 from mobilerun.harness.env_service.app import create_env_app
+from mobilerun.harness.protocol import ErrorCode, ProtocolError
 from mobilerun.harness.testing import ScriptedBackend
 
 
@@ -260,3 +261,54 @@ def test_bearer_token_is_enforced_when_configured():
         assert client.get("/v1/tasks").status_code == 401
         authorized = client.get("/v1/tasks", headers={"authorization": "Bearer s3cret"})
         assert authorized.status_code == 200
+
+
+class _FlakyObserve(ScriptedBackend):
+    """A backend whose device link drops after the session is opened."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fail_observations = False
+
+    async def observe(self, *, seq: int):
+        if self.fail_observations:
+            raise ProtocolError(
+                503, ErrorCode.BACKEND_UNAVAILABLE, "device disconnected"
+            )
+        return await super().observe(seq=seq)
+
+
+def test_step_survives_a_failed_post_action_observation():
+    backend = _FlakyObserve(tasks=["Alpha"])
+    with make_client(backend) as client:
+        session_id = client.post("/v1/sessions", json={"task_id": "Alpha"}).json()[
+            "session_id"
+        ]
+        backend.fail_observations = True
+        response = client.post(
+            f"/v1/sessions/{session_id}/step",
+            json={
+                "action": {"op": "tap", "args": {"x": 1, "y": 2}},
+                "step_index": 1,
+                "include_observation": True,
+            },
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    # The action ran; only the follow-up frame was unavailable.
+    assert body["ok"] is True
+    assert body["observation"] is None
+
+
+def test_observe_maps_a_disconnect_to_503():
+    backend = _FlakyObserve(tasks=["Alpha"])
+    with make_client(backend) as client:
+        session_id = client.post("/v1/sessions", json={"task_id": "Alpha"}).json()[
+            "session_id"
+        ]
+        backend.fail_observations = True
+        response = client.post(f"/v1/sessions/{session_id}/observe?fresh=true")
+
+    assert response.status_code == 503
+    assert response.json()["code"] == "backend_unavailable"

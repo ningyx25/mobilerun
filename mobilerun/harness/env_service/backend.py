@@ -23,6 +23,8 @@ import logging
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional
 
+import httpx
+
 from mobilerun.harness.actions import screen_from_state, supported_ops
 from mobilerun.harness.protocol import (
     Capabilities,
@@ -134,12 +136,22 @@ class DriverBackend(EnvBackend):
     # -- episode I/O -------------------------------------------------------
 
     async def observe(self, *, seq: int) -> Observation:
-        screenshot = await self.driver.screenshot()
-        width, height = image_dimensions(screenshot)
-        state: Optional[Dict[str, Any]] = None
-        if "get_ui_tree" in getattr(self.driver, "supported", set()):
-            state = await self.driver.get_ui_tree()
-        input_size = await self._driver_input_size(width, height)
+        try:
+            screenshot = await self.driver.screenshot()
+            width, height = image_dimensions(screenshot)
+            state: Optional[Dict[str, Any]] = None
+            if "get_ui_tree" in getattr(self.driver, "supported", set()):
+                state = await self.driver.get_ui_tree()
+            input_size = await self._driver_input_size(width, height)
+        except httpx.TransportError as exc:
+            # The device server dropped the connection. Surface it as a
+            # retryable service error instead of a 500 traceback.
+            raise ProtocolError(
+                503,
+                ErrorCode.BACKEND_UNAVAILABLE,
+                f"Device server for '{self.id}' disconnected: {exc}",
+                {"retry_after_s": 2},
+            ) from exc
         screen = screen_from_state(
             state,
             native_width=width,

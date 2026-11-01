@@ -239,7 +239,13 @@ class MobileWorldHttpDriver(DeviceDriver):
         if self._connected:
             return
         self._client = httpx.AsyncClient(
-            base_url=self.url, timeout=self.timeout, transport=self.transport
+            base_url=self.url,
+            timeout=self.timeout,
+            transport=self.transport,
+            # See the AndroidWorld driver: steps are minutes apart and the
+            # server closes idle keep-alive connections, so pooling would
+            # race the close.
+            limits=httpx.Limits(max_keepalive_connections=0),
         )
         try:
             response = await self._client.get("/health")
