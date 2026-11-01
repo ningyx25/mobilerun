@@ -54,8 +54,7 @@ from mobilerun.app_cards.providers import (
 )
 from mobilerun.config_manager.prompt_loader import PromptLoader
 from mobilerun.tools.ui.provider import (
-    resize_model_screenshot_with_grid,
-    should_resize_model_screenshot,
+    resize_model_screenshot_async,
 )
 
 if TYPE_CHECKING:
@@ -322,17 +321,7 @@ class ManagerAgent(Workflow):
 
             # Add screenshot if vision enabled
             if screenshot and self.vision:
-                try:
-                    if should_resize_model_screenshot(self.state_provider):
-                        screenshot = resize_model_screenshot_with_grid(
-                            self.state_provider, screenshot
-                        )
-                    messages[last_user_idx].blocks.append(ImageBlock(image=screenshot))
-                except Exception as e:  # noqa: BLE001
-                    # Skip an undecodable frame instead of failing the run.
-                    logger.warning(
-                        f"⚠️ Dropping undecodable screenshot for this step: {e}"
-                    )
+                messages[last_user_idx].blocks.append(ImageBlock(image=screenshot))
 
             # Add previous device state to second-to-last user message
             if len(user_indices) >= 2:
@@ -496,6 +485,18 @@ class ManagerAgent(Workflow):
 
         # Build system prompt
         system_prompt = await self._build_system_prompt()
+
+        if screenshot and self.vision:
+            try:
+                # Offloaded to a worker thread so the loop stays free for
+                # concurrently running agents.
+                screenshot = await resize_model_screenshot_async(
+                    self.state_provider, screenshot
+                )
+            except Exception as e:  # noqa: BLE001
+                # Skip an undecodable frame instead of failing the run.
+                logger.warning(f"⚠️ Dropping undecodable screenshot for this step: {e}")
+                screenshot = None
 
         # Build messages with context
         messages = self._build_messages_with_context(

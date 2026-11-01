@@ -32,8 +32,7 @@ from mobilerun.agent.utils.prompt_resolver import PromptResolver
 from mobilerun.agent.utils.tracing_setup import record_langfuse_screenshot
 from mobilerun.config_manager.prompt_loader import PromptLoader
 from mobilerun.tools.ui.provider import (
-    resize_model_screenshot_with_grid,
-    should_resize_model_screenshot,
+    resize_model_screenshot_async,
 )
 
 if TYPE_CHECKING:
@@ -225,10 +224,11 @@ class StatelessManagerAgent(Workflow):
 
         if self.vision and screenshot:
             try:
-                if should_resize_model_screenshot(self.state_provider):
-                    screenshot = resize_model_screenshot_with_grid(
-                        self.state_provider, screenshot
-                    )
+                # Offloaded to a worker thread so the loop stays free for
+                # concurrently running agents.
+                screenshot = await resize_model_screenshot_async(
+                    self.state_provider, screenshot
+                )
                 messages[0]["content"].append({"image": screenshot})
             except Exception as e:  # noqa: BLE001
                 # Skip an undecodable frame instead of failing the run.
