@@ -4,7 +4,11 @@ import asyncio
 
 import pytest
 
-from mobilerun.harness.actions import execute_action, screen_from_state
+from mobilerun.harness.actions import (
+    _resolve_package,
+    execute_action,
+    screen_from_state,
+)
 from mobilerun.harness.protocol import (
     Action,
     ErrorCode,
@@ -165,3 +169,62 @@ def test_screen_from_state_prefers_declared_bounds():
 
     fallback = screen_from_state(None, native_width=1080, native_height=2400)
     assert (fallback.native_width, fallback.native_height) == (1080, 2400)
+
+
+class _AppDriver:
+    supported = {"start_app"}
+
+    def __init__(self, packages, *, start_result=None):
+        self.packages = packages
+        self.start_result = start_result
+        self.started = []
+
+    async def list_launchable_packages(self):
+        return list(self.packages)
+
+    async def start_app(self, package, activity=None):
+        self.started.append((package, activity))
+        return self.start_result or f"Started {package}"
+
+
+def test_open_app_resolves_a_description_to_a_package():
+    driver = _AppDriver(
+        ["com.dimowner.audiorecorder", "com.android.chrome", "com.android.settings"]
+    )
+
+    async def scenario():
+        return await execute_action(
+            driver,
+            Action(op="open_app", args={"app": "Audio Recorder"}),
+            screen=ScreenInfo(native_width=1080, native_height=2400),
+        )
+
+    assert "Started com.dimowner.audiorecorder" in asyncio.run(scenario())
+    assert driver.started == [("com.dimowner.audiorecorder", None)]
+
+
+def test_open_app_passes_a_package_id_through():
+    driver = _AppDriver(["com.android.chrome"])
+    assert asyncio.run(_resolve_package(driver, "com.android.chrome")) == (
+        "com.android.chrome"
+    )
+
+
+def test_open_app_rejects_an_unresolvable_name():
+    driver = _AppDriver(["com.android.chrome"])
+    with pytest.raises(ValueError, match="Unknown app"):
+        asyncio.run(_resolve_package(driver, "Files"))
+
+
+def test_open_app_surfaces_a_failed_launch():
+    driver = _AppDriver(
+        ["com.android.chrome"], start_result="Failed to start com.android.chrome"
+    )
+    with pytest.raises(RuntimeError, match="Failed to start"):
+        asyncio.run(
+            execute_action(
+                driver,
+                Action(op="open_app", args={"app": "com.android.chrome"}),
+                screen=ScreenInfo(native_width=1080, native_height=2400),
+            )
+        )

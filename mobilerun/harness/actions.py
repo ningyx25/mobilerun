@@ -24,7 +24,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any, Dict, Optional
+import re
+from typing import Any, Dict, List, Optional
 
 from mobilerun.harness.protocol import (
     Action,
@@ -147,8 +148,13 @@ async def execute_action(
 
     if op == "open_app":
         activity = args.get("activity")
-        result = await driver.start_app(str(args["app"]), activity)
-        return str(result)
+        package = await _resolve_package(driver, str(args.get("app", "")))
+        result = str(await driver.start_app(package, activity))
+        # Drivers report a failed launch in the return value; surface it as a
+        # rejected action instead of a silent success.
+        if result.lower().startswith("failed"):
+            raise RuntimeError(result)
+        return result
 
     if op == "stop_app":
         result = await driver.stop_app(str(args["app"]))
@@ -159,6 +165,64 @@ async def execute_action(
         ErrorCode.UNSUPPORTED_ACTION,
         f"Unsupported action '{op}'",
     )
+
+
+async def _resolve_package(driver: Any, app: str) -> str:
+    """Map a human app name to the package id ``start_app`` needs.
+
+    mobilerun resolves this with a dedicated LLM workflow; the harness has no
+    model of its own, so it matches the description against the installed
+    launchable packages. A package id is passed through untouched, and an
+    unknown name fails with the candidate list instead of a cryptic adb error.
+    """
+    app = app.strip()
+    if not app:
+        raise ValueError("open_app requires an app name or package id")
+    if "." in app:
+        return app
+
+    packages = await _launchable_packages(driver)
+    lowered = app.lower()
+    for package in packages:
+        if package.lower() == lowered:
+            return package
+
+    tokens = [token for token in re.split(r"[^a-z0-9]+", lowered) if token]
+    if not tokens:
+        raise ValueError(f"Cannot resolve app name '{app}'")
+
+    # Every word of the description appears in the package id: the shortest
+    # such id is the app itself rather than a companion package.
+    full = [
+        package for package in packages if all(t in package.lower() for t in tokens)
+    ]
+    if full:
+        return min(full, key=len)
+
+    partial = sorted(
+        (
+            (sum(t in package.lower() for t in tokens), len(package), package)
+            for package in packages
+            if any(t in package.lower() for t in tokens)
+        ),
+        key=lambda item: (-item[0], item[1]),
+    )
+    if partial and (len(partial) == 1 or partial[0][0] > partial[1][0]):
+        return partial[0][2]
+
+    choices = ", ".join(sorted(packages)[:30])
+    raise ValueError(f"Unknown app '{app}'. Installed launchable packages: {choices}")
+
+
+async def _launchable_packages(driver: Any) -> List[str]:
+    lister = getattr(driver, "list_launchable_packages", None)
+    if lister is not None:
+        return [str(package) for package in await lister()]
+    get_apps = getattr(driver, "get_apps", None)
+    if get_apps is not None:
+        apps = await get_apps()
+        return [str(app.get("package") or "") for app in apps if app.get("package")]
+    return [str(package) for package in await driver.list_packages()]
 
 
 def supported_ops(driver: Any) -> list[str]:
