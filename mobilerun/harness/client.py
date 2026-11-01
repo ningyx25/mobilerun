@@ -16,7 +16,7 @@ import asyncio
 import json
 import logging
 import time
-from typing import Any, AsyncIterator, Dict, List, Optional
+from typing import Any, AsyncIterator, Callable, Dict, List, Optional
 
 import httpx
 
@@ -353,11 +353,17 @@ class AgentClient(_BaseServiceClient):
         *,
         timeout_s: float,
         poll_s: float = 1.0,
+        on_update: Optional[Callable[[EpisodeInfo], None]] = None,
     ) -> EpisodeInfo:
         """Poll until the episode leaves the running state (or times out)."""
         deadline = time.monotonic() + timeout_s
         while True:
             info = await self.get_episode(episode_id)
+            if on_update is not None:
+                try:
+                    on_update(info)
+                except Exception:  # noqa: BLE001 - progress must not break polling
+                    logger.debug("wait_episode progress callback failed")
             if info.state.value != "running":
                 return info
             if time.monotonic() >= deadline:
