@@ -21,7 +21,7 @@ import logging
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence
 
 from rich.console import Console
 from rich.table import Table
@@ -43,7 +43,6 @@ from mobilerun.harness.protocol import (
     AgentOverrides,
     EnvironmentRef,
     EpisodeEvidenceConfig,
-    EpisodeInfo,
     EpisodeLimits,
     EpisodeRequest,
     EpisodeState,
@@ -55,7 +54,6 @@ console = Console()
 
 _BENCHMARK_NAME = "harness"
 _CAPACITY_RETRY_S = 5.0
-_HEARTBEAT_S = 60.0
 
 
 # ---------------------------------------------------------------------------
@@ -140,7 +138,6 @@ async def _run_one(
     evidence_root: Optional[Path],
     backend: Optional[str],
     agent_id: Optional[str] = None,
-    on_update: Optional[Callable[[EpisodeInfo], None]] = None,
 ) -> TaskResult:
     """Run one task end to end and return its result row."""
     task_type, _, idx_text = task.id.partition("#")
@@ -196,7 +193,6 @@ async def _run_one(
             episode_id,
             timeout_s=task_timeout + _AGENT_GRACE_S,
             poll_s=1.0,
-            on_update=on_update,
         )
         if final.state is EpisodeState.RUNNING:
             # The agent is wedged; cancel and record it as an error instead of
@@ -427,10 +423,13 @@ async def run_harness_suite(
             )
 
         pending: List[TaskSpec] = []
-        for task in selected:
+        total = len(selected)
+        for index, task in enumerate(selected, start=1):
             recorded = results.get(_task_key(task))
             if resume and recorded is not None and recorded.error is None:
-                console.print(f"[dim]{task.id} — already recorded, skipped[/]")
+                console.print(
+                    f"[dim][{index}/{total}] {task.id} — already recorded, skipped[/]"
+                )
                 continue
             pending.append(task)
 
@@ -442,50 +441,24 @@ async def run_harness_suite(
         write_lock = asyncio.Lock()
         semaphore = asyncio.Semaphore(max(1, parallel))
         completed = 0
-        run_started = time.monotonic()
-        running: Dict[str, Dict[str, Any]] = {}
 
         async def _worker(task: TaskSpec) -> None:
             nonlocal completed
             async with semaphore:
-                key = _task_key(task)
-                budget = steps or task.max_steps
-                entry: Dict[str, Any] = {
-                    "id": task.id,
-                    "started": time.monotonic(),
-                    "steps": 0,
-                    "budget": budget,
-                }
-                running[key] = entry
-                difficulty = str(task.metadata.get("difficulty") or "").strip()
-                label = ", ".join(
-                    part for part in (difficulty, f"budget {budget}") if part
+                result = await _run_with_capacity_retry(
+                    task,
+                    env=env,
+                    agent=agent,
+                    agent_env_url=agent_env_url_override,
+                    overrides=overrides,
+                    steps=steps,
+                    task_timeout=task_timeout,
+                    seed=seed,
+                    evidence=capture_evidence,
+                    evidence_root=evidence_root,
+                    backend=None if parallel > 1 else backend,
+                    agent_id=agent_id,
                 )
-                console.print(f"[dim]▶ {task.id} ({label})[/]")
-
-                def _on_update(
-                    info: EpisodeInfo, entry: Dict[str, Any] = entry
-                ) -> None:
-                    entry["steps"] = info.steps
-
-                try:
-                    result = await _run_with_capacity_retry(
-                        task,
-                        env=env,
-                        agent=agent,
-                        agent_env_url=agent_env_url_override,
-                        overrides=overrides,
-                        steps=steps,
-                        task_timeout=task_timeout,
-                        seed=seed,
-                        evidence=capture_evidence,
-                        evidence_root=evidence_root,
-                        backend=None if parallel > 1 else backend,
-                        agent_id=agent_id,
-                        on_update=_on_update,
-                    )
-                finally:
-                    running.pop(key, None)
             key = result.key
             _write_episode_manifest(result, run_meta)
             results[key] = result
@@ -494,50 +467,7 @@ async def run_harness_suite(
                 _write_results(output_path, run_meta, results, run_history)
                 _print_result_line(completed, len(pending), result)
 
-        async def _heartbeat() -> None:
-            """Long episodes are otherwise silent; report progress and ETA."""
-            while True:
-                await asyncio.sleep(_HEARTBEAT_S)
-                if not running:
-                    continue
-                now = time.monotonic()
-                elapsed = now - run_started
-                total = len(pending)
-                line = f"{completed}/{total} done"
-                if total:
-                    line += f" ({completed / total:.1%})"
-                scored = [
-                    row
-                    for row in results.values()
-                    if row.error is None and row.gated_score is not None
-                ]
-                if scored:
-                    mean = sum(row.gated_score or 0.0 for row in scored) / len(scored)
-                    line += f" | gated {mean:.2f}"
-                errors = sum(1 for row in results.values() if row.error is not None)
-                line += f" | errors {errors} | {_format_elapsed(elapsed)}"
-                if completed:
-                    eta = elapsed / completed * (total - completed)
-                    line += f" | eta {_format_elapsed(eta)}"
-                console.print(f"[dim]… {line}[/]")
-
-                parts = []
-                for item in running.values():
-                    segment = f"{item['id']} {_format_elapsed(now - item['started'])}"
-                    if item["budget"]:
-                        segment += f" · step {item['steps']}/{item['budget']}"
-                    parts.append(segment)
-                console.print(f"[dim]   running: {', '.join(parts)}[/]")
-
-        heartbeat = asyncio.create_task(_heartbeat())
-        try:
-            await asyncio.gather(*(_worker(task) for task in pending))
-        finally:
-            heartbeat.cancel()
-            try:
-                await heartbeat
-            except asyncio.CancelledError:
-                pass
+        await asyncio.gather(*(_worker(task) for task in pending))
 
         run_meta["finished_at"] = datetime.now().isoformat(timespec="seconds")
         _write_results(output_path, run_meta, results, run_history)
@@ -596,14 +526,6 @@ async def _wait_healthy(env: EnvClient, agent: AgentClient, timeout: float) -> b
             )
             return False
         await asyncio.sleep(5.0)
-
-
-def _format_elapsed(seconds: float) -> str:
-    minutes, rest = divmod(int(seconds), 60)
-    if minutes >= 60:
-        hours, minutes = divmod(minutes, 60)
-        return f"{hours}h{minutes:02d}m"
-    return f"{minutes}m{rest:02d}s"
 
 
 def _write_episode_manifest(result: TaskResult, run_meta: Dict[str, Any]) -> None:
@@ -680,20 +602,16 @@ def _write_episode_manifest(result: TaskResult, run_meta: Dict[str, Any]) -> Non
 
 
 def _print_result_line(index: int, total: int, result: TaskResult) -> None:
+    status = "green" if (result.gated_score or 0.0) > 0.5 else "red"
     if result.error is not None:
         console.print(
-            f"[red]! [{index}/{total}] {result.task_type} "
+            f"[red][{index}/{total}] {result.task_type} ({result.difficulty}) "
             f"ERROR: {result.error[:160]} ({result.duration_s:.1f}s)[/]"
         )
         return
-    ok = (result.gated_score or 0.0) > 0.5
-    steps = str(result.steps)
-    if result.max_steps:
-        steps += f"/{result.max_steps}"
     console.print(
-        f"[{'green' if ok else 'red'}]{'✓' if ok else '✗'} "
-        f"[{index}/{total}] {result.task_type} "
-        f"gated={result.gated_score:.2f} raw={result.score:.2f} "
-        f"steps={steps} finished={'yes' if result.finished else 'no'} "
+        f"[{status}][{index}/{total}] {result.task_type} ({result.difficulty}) "
+        f"score={result.score:.2f} gated={result.gated_score:.2f} "
+        f"steps={result.steps} finished={result.finished} "
         f"({result.duration_s:.1f}s)[/]"
     )

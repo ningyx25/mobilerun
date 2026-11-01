@@ -551,8 +551,6 @@ class EpisodeInfo(BaseModel):
     error: Optional[str] = None
     created_at: str
     goal: str = ""
-    #: Steps decided so far. Live while the episode runs, final afterwards.
-    steps: int = 0
     # Set by the dispatcher: which registered agent is running this episode.
     agent_id: Optional[str] = None
 
