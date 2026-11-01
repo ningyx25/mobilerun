@@ -307,3 +307,39 @@ def test_select_tasks_rejects_unknown_names_and_empty_selection():
         _select_tasks(catalogue, names="Nope#0")
     with pytest.raises(ValueError, match="empty"):
         _select_tasks(catalogue, backend="aw9")
+
+
+def test_episode_events_render_like_runbench(capsys):
+    from mobilerun.harness.runner import _render_episode_event
+
+    _render_episode_event(
+        "Task",
+        {
+            "type": "llm_response",
+            "data": {"thought": "look at the screen", "code": "<function_calls/>"},
+        },
+    )
+    _render_episode_event(
+        "Task", {"type": "action_result", "data": {"ok": False, "error": "boom"}}
+    )
+    _render_episode_event(
+        "Task", {"type": "agent_end", "data": {"success": True, "reason": "finished"}}
+    )
+
+    out = capsys.readouterr().out
+    assert "🧠 Thinking: look at the screen" in out
+    assert "💻 Executing action code" in out
+    assert "❌ Action error: boom" in out
+    assert "■ done: finished" in out
+
+
+def test_goal_line_matches_runbench(capsys):
+    from mobilerun.harness.protocol import EpisodeResult
+    from mobilerun.harness.runner import _print_goal_line
+
+    _print_goal_line("Task", EpisodeResult(success=True, reason="ok"))
+    _print_goal_line("Task", EpisodeResult(success=False, reason="nope"))
+
+    out = capsys.readouterr().out
+    assert "🎉 Goal achieved: ok" in out
+    assert "❌ Goal failed: nope" in out

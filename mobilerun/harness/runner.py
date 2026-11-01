@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
 from rich.console import Console
+from rich.markup import escape
 from rich.table import Table
 
 from mobilerun.benchmark.android_world import (  # shared result/provenance plumbing
@@ -45,6 +46,7 @@ from mobilerun.harness.protocol import (
     EpisodeEvidenceConfig,
     EpisodeLimits,
     EpisodeRequest,
+    EpisodeResult,
     EpisodeState,
     TaskSpec,
 )
@@ -138,6 +140,8 @@ async def _run_one(
     evidence_root: Optional[Path],
     backend: Optional[str],
     agent_id: Optional[str] = None,
+    verbose: bool = False,
+    debug: bool = False,
 ) -> TaskResult:
     """Run one task end to end and return its result row."""
     task_type, _, idx_text = task.id.partition("#")
@@ -153,6 +157,7 @@ async def _run_one(
     started = time.monotonic()
     session_id: Optional[str] = None
     episode_id: Optional[str] = None
+    progress_task: Optional[asyncio.Task] = None
     try:
         session = await env.create_session(
             task.id.partition("#")[0],
@@ -188,6 +193,11 @@ async def _run_one(
             )
         )
         episode_id = episode.episode_id
+        if debug:
+            # Live agent events, rendered like `runbench --debug`.
+            progress_task = asyncio.create_task(
+                _stream_episode_progress(agent, episode_id, task_type)
+            )
 
         final = await agent.wait_episode(
             episode_id,
@@ -207,6 +217,9 @@ async def _run_one(
         # leaves it empty and the requested id stands.
         result.agent_id = final.agent_id or result.agent_id
         run = final.result
+        if (verbose or debug) and run is not None:
+            # Same info-level line runbench emits when the workflow finalizes.
+            _print_goal_line(task_type, run)
         if run is not None:
             result.success = run.success
             result.finished = run.declared_done
@@ -236,6 +249,12 @@ async def _run_one(
         result.error = f"{type(exc).__name__}: {exc}"
     finally:
         result.duration_s = time.monotonic() - started
+        if progress_task is not None:
+            progress_task.cancel()
+            try:
+                await progress_task
+            except asyncio.CancelledError:
+                pass
         if session_id is not None:
             try:
                 await env.delete_session(session_id)
@@ -458,6 +477,8 @@ async def run_harness_suite(
                     evidence_root=evidence_root,
                     backend=None if parallel > 1 else backend,
                     agent_id=agent_id,
+                    verbose=verbose,
+                    debug=bool(debug),
                 )
             key = result.key
             _write_episode_manifest(result, run_meta)
@@ -598,6 +619,67 @@ def _write_episode_manifest(result: TaskResult, run_meta: Dict[str, Any]) -> Non
     except Exception as exc:  # noqa: BLE001 - evidence is best effort
         logger.warning(
             "Writing the episode manifest for %s failed: %s", result.task_type, exc
+        )
+
+
+def _preview(text: str, limit: int) -> str:
+    return text[:limit] + "..." if len(text) > limit else text
+
+
+def _print_goal_line(task_type: str, run: EpisodeResult) -> None:
+    """The info-level finalize line runbench prints per task."""
+    ok = bool(run.success)
+    console.print(
+        f"[dim]{task_type}[/] [{'green' if ok else 'red'}]"
+        f"{'🎉 Goal achieved' if ok else '❌ Goal failed'}: {escape(run.reason)}[/]"
+    )
+
+
+async def _stream_episode_progress(
+    agent: AgentClient, episode_id: str, label: str
+) -> None:
+    try:
+        async for event in agent.stream_events(episode_id):
+            _render_episode_event(label, event)
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:  # noqa: BLE001 - progress is best effort
+        logger.debug("Progress stream for %s ended: %s", episode_id, exc)
+
+
+def _render_episode_event(label: str, event: Dict[str, Any]) -> None:
+    """Render one SSE frame with runbench's event vocabulary."""
+    kind = event.get("type")
+    data = event.get("data") or {}
+    prefix = f"[dim]{label}[/] "
+    if kind == "episode_started":
+        console.print(f"{prefix}[magenta]💬 Task input received...[/]")
+    elif kind == "llm_response":
+        thought = str(data.get("thought") or "").strip()
+        if thought:
+            console.print(
+                f"{prefix}[cyan]🧠 Thinking: {escape(_preview(thought, 150))}[/]"
+            )
+        code = data.get("code")
+        if code:
+            console.print(f"{prefix}[yellow]💻 Executing action code[/]")
+            console.print(f"{prefix}[blue]{escape(str(code))}[/]")
+    elif kind == "action_result":
+        summary = str(data.get("summary") or "")
+        if data.get("ok"):
+            console.print(
+                f"{prefix}[green]⚡ Action result: {escape(_preview(summary, 100))}[/]"
+            )
+        else:
+            error = str(data.get("error") or summary)
+            console.print(
+                f"{prefix}[red]❌ Action error: {escape(_preview(error, 100))}[/]"
+            )
+    elif kind == "agent_end":
+        ok = bool(data.get("success"))
+        console.print(
+            f"{prefix}[{'green' if ok else 'red'}]"
+            f"■ {'done' if ok else 'failed'}: {escape(str(data.get('reason') or ''))}[/]"
         )
 
 
