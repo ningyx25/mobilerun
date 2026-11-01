@@ -199,6 +199,70 @@ def test_agent_id_flows_through_the_dispatcher(tmp_path, monkeypatch):
     assert row["gated_score"] == 1.0
 
 
+def test_episode_manifest_is_written_after_scoring(tmp_path):
+    from mobilerun.benchmark.android_world import TaskResult
+    from mobilerun.harness.runner import _write_episode_manifest
+
+    bundle = tmp_path / "Task_0"
+    (bundle / "trajectory").mkdir(parents=True)
+    (bundle / "timeline.json").write_text(
+        json.dumps(
+            {
+                "usage_totals": {
+                    "request_tokens": 1,
+                    "response_tokens": 2,
+                    "total_tokens": 3,
+                    "requests": 4,
+                }
+            }
+        )
+    )
+    (bundle / "conversation.json").write_text("[]")
+    (bundle / "ui_tree_before.json").write_text("{}")
+
+    result = TaskResult(task_type="Task", task_idx=0, difficulty="easy")
+    result.evidence_dir = str(bundle)
+    result.goal = "do it"
+    result.score = 0.75
+    result.gated_score = 0.75
+    result.success = True
+    result.finished = True
+    result.steps = 3
+    result.reason = "done"
+    result.max_steps = 20
+    result.usage_totals = {"total_tokens": 10}
+
+    run_meta = {"run_id": "r1", "benchmark": "harness"}
+    _write_episode_manifest(result, run_meta)
+
+    manifest = json.loads((bundle / "episode.json").read_text())
+    assert manifest["task_type"] == "Task"
+    assert manifest["score"] == 0.75
+    assert manifest["trajectory_dir"] == "trajectory"
+    # Prefer the timeline's totals: it sums every model call, not just the
+    # usage attached to episode decisions.
+    assert manifest["usage_totals"] == {
+        "request_tokens": 1,
+        "response_tokens": 2,
+        "total_tokens": 3,
+        "requests": 4,
+    }
+    assert manifest["conversation_path"] == "conversation.json"
+    assert manifest["timeline_path"] == "timeline.json"
+    assert manifest["ui_tree_paths"] == ["ui_tree_before.json"]
+    assert manifest["run"] == run_meta
+
+
+def test_episode_manifest_skips_a_missing_bundle(tmp_path):
+    from mobilerun.benchmark.android_world import TaskResult
+    from mobilerun.harness.runner import _write_episode_manifest
+
+    result = TaskResult(task_type="Task", task_idx=0)
+    result.evidence_dir = str(tmp_path / "missing")
+    _write_episode_manifest(result, {})  # must not raise
+    assert not (tmp_path / "missing" / "episode.json").exists()
+
+
 def _task(task_id: str, backend: str = "aw0", difficulty: str = "easy") -> TaskSpec:
     return TaskSpec(id=task_id, backend=backend, metadata={"difficulty": difficulty})
 

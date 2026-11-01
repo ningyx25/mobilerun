@@ -16,6 +16,7 @@ and resume works the same way in both.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
 from datetime import datetime
@@ -466,6 +467,7 @@ async def run_harness_suite(
                 finally:
                     running.pop(key, None)
             key = result.key
+            _write_episode_manifest(result, run_meta)
             results[key] = result
             async with write_lock:
                 completed += 1
@@ -563,6 +565,79 @@ def _format_elapsed(seconds: float) -> str:
         hours, minutes = divmod(minutes, 60)
         return f"{hours}h{minutes:02d}m"
     return f"{minutes}m{rest:02d}s"
+
+
+def _write_episode_manifest(result: TaskResult, run_meta: Dict[str, Any]) -> None:
+    """Write the reference-format ``episode.json`` into the episode's bundle.
+
+    The agent service writes the conversation, timeline, trees and trajectory,
+    but only the runner knows the score, so the manifest is completed here.
+    Best effort: a remote agent's filesystem may not be reachable, and that
+    must not fail the run.
+    """
+    if not result.evidence_dir:
+        return
+    bundle = Path(result.evidence_dir)
+    if not bundle.is_dir():
+        return
+
+    # The timeline sums every model call; the episode result only carries the
+    # usage attached to decisions. Prefer the timeline, like the reference.
+    usage_totals = result.usage_totals or None
+    timeline_exists = (bundle / "timeline.json").exists()
+    if timeline_exists:
+        try:
+            timeline = json.loads((bundle / "timeline.json").read_text())
+            usage_totals = timeline.get("usage_totals") or usage_totals
+        except Exception:  # noqa: BLE001 - evidence is best effort
+            pass
+
+    payload = {
+        "task_type": result.task_type,
+        "task_idx": result.task_idx,
+        "difficulty": result.difficulty,
+        "goal": result.goal,
+        "score": result.score,
+        "gated_score": result.gated_score,
+        "success": result.success,
+        "finished": result.finished,
+        "steps": result.steps,
+        "reason": result.reason,
+        "eval_reason": result.eval_reason,
+        "duration_s": result.duration_s,
+        "error": result.error,
+        "timestamp": result.timestamp,
+        "run_id": run_meta.get("run_id"),
+        "server_url": result.server_url,
+        "complexity": result.complexity,
+        "start_on_home_screen": result.start_on_home_screen,
+        "max_steps": result.max_steps,
+        "evidence_dir": str(bundle),
+        "trajectory_dir": ("trajectory" if (bundle / "trajectory").is_dir() else None),
+        "usage_totals": usage_totals,
+        "conversation_path": (
+            "conversation.json" if (bundle / "conversation.json").exists() else None
+        ),
+        "timeline_path": "timeline.json" if timeline_exists else None,
+        "ui_tree_paths": [
+            name
+            for name in ("ui_tree_before.json", "ui_tree_after.json")
+            if (bundle / name).exists()
+        ],
+        "run": run_meta,
+    }
+    try:
+        target = bundle / "episode.json"
+        temp = target.with_suffix(".json.tmp")
+        temp.write_text(
+            json.dumps(payload, indent=2, ensure_ascii=False, default=str) + "\n",
+            encoding="utf-8",
+        )
+        temp.replace(target)
+    except Exception as exc:  # noqa: BLE001 - evidence is best effort
+        logger.warning(
+            "Writing the episode manifest for %s failed: %s", result.task_type, exc
+        )
 
 
 def _print_result_line(index: int, total: int, result: TaskResult) -> None:
