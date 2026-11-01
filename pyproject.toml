@@ -76,6 +76,14 @@ dev = [
     "bandit>=1.8.6",
     "safety>=3.2.11",
     "mobilerun[langfuse]",
+    "mobilerun[harness]",
+]
+harness = [
+    # ``mobilerun serve env|agent`` and ``mobilerun eval``. Both arrive
+    # transitively today (via arize-phoenix and mcp), but the harness must not
+    # depend on that: declare them.
+    "fastapi>=0.115",
+    "uvicorn>=0.31",
 ]
 langfuse = [
     "langfuse==4.15.1",
@@ -105,6 +113,18 @@ target-version = "py313"
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
+# ``agent-harness/`` is a standalone project with its own tests and venv.
+norecursedirs = [
+    "agent-harness",
+    "*.egg",
+    ".*",
+    "_darcs",
+    "build",
+    "CVS",
+    "dist",
+    "node_modules",
+    "venv",
+]
 
 [tool.ruff.lint]
 select = [

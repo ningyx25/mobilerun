@@ -360,6 +360,8 @@ class TaskResult:
     # accumulate rows from several sharded / resumed runs) --
     run_id: str = ""
     server_url: str = ""
+    # Which registered agent ran the episode (dispatcher mode only).
+    agent_id: str = ""
     # -- evidence (all optional; populated when evidence_dir is enabled) --
     complexity: Optional[float] = None
     start_on_home_screen: Optional[bool] = None

@@ -1998,6 +1998,13 @@ async def test(
             logger.debug(traceback.format_exc())
 
 
+# Harness commands (``serve env|agent``, ``eval``) live in their own module so
+# the server stack is imported lazily, inside the commands that need it.
+from mobilerun.cli.harness_commands import register as _register_harness_commands
+
+_register_harness_commands(cli)
+
+
 if __name__ == "__main__":
     command = "open youtube and play a song by shakira"
     command = "use open_app to open the settings and search for the battery and enter the first result"

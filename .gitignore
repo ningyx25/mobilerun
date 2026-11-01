@@ -46,3 +46,6 @@ agent-test-flows/reports/
 
 # benchmark run artifacts
 runs/
+
+# standalone agent project (its own git repository)
+agent-harness/
