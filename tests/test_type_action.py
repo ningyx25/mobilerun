@@ -80,6 +80,23 @@ class TypeActionTest(unittest.TestCase):
         self.assertEqual(driver.taps, [])
         self.assertEqual(ui.requested_indices, [])
 
+    def test_type_text_strips_surrounding_newlines(self):
+        driver = FakeDriver()
+        ctx = SimpleNamespace(driver=driver, ui=FakeUI())
+
+        result = asyncio.run(type_text("\nfolder_x\n", ctx=ctx))
+
+        self.assertTrue(result.success)
+        self.assertEqual(driver.inputs, [("folder_x", False)])
+
+    def test_type_text_keeps_interior_newlines(self):
+        driver = FakeDriver()
+        ctx = SimpleNamespace(driver=driver, ui=FakeUI())
+
+        asyncio.run(type_text("line1\nline2", clear=True, ctx=ctx))
+
+        self.assertEqual(driver.inputs, [("line1\nline2", True)])
+
     def test_type_schema_makes_index_optional_and_explains_focused_input(self):
         async def run():
             registry, _ = await build_tool_registry(supported_buttons={"enter"})

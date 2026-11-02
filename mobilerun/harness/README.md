@@ -105,6 +105,8 @@ Semantics that matter:
 * **`finish` owns the scoring order** (`env_service/scoring.py`, the only copy):
   submit answer → stabilize → score → recheck a zero once → gate on
   `declared_done`. `gated_score` is derived server-side and cannot be forged.
+  The answer comes from the finish body (`answer`), which the runner passes
+  down; a `complete` action's `message` is prose and is never submitted as one.
 * **Sessions expire.** Abandoned sessions are torn down after `--session-ttl`
   (default 2 h) so a crashed client cannot hold a device forever.
 

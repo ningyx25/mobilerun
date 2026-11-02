@@ -128,6 +128,17 @@ def test_type_and_key_map_to_input_verbs():
     assert driver.calls == [("press_key_code", 66)]
 
 
+def test_type_strips_edge_newlines_and_keeps_interior_ones():
+    driver, summary = run(
+        Action(op="type", args={"text": "\nfolder_x\n", "clear": True})
+    )
+    assert driver.calls == [("input_text", "folder_x", True)]
+    assert summary == "Typed 8 character(s) after clearing"
+
+    driver, _ = run(Action(op="type", args={"text": "line1\nline2"}))
+    assert driver.calls == [("input_text", "line1\nline2", False)]
+
+
 def test_open_app_forwards_activity():
     driver, _ = run(
         Action(op="open_app", args={"app": "com.example", "activity": ".Main"})

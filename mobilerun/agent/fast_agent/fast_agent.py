@@ -211,6 +211,7 @@ class FastAgent(Workflow):
             "native_tools": self.native_tools,
             "vision": self.vision,
             "platform": self.shared_state.platform,
+            "device_date": self.shared_state.device_date,
             "screenshot_only": bool(
                 getattr(self.state_provider, "requires_coordinate_tools", False)
             ),

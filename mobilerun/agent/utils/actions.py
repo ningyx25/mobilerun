@@ -33,6 +33,16 @@ def _normalize_choice(value: object) -> str:
     return str(value or "").strip()
 
 
+def _normalize_text(value: object) -> str:
+    """Normalize a free-text tool argument.
+
+    Models wrap text parameters in stray whitespace/newlines. AndroidWorld
+    turns each ``\\n`` into a real ENTER keypress, so an edge newline opens
+    the wrong dialog instead of typing. Interior newlines are user data.
+    """
+    return str(value if value is not None else "").strip()
+
+
 # ---------------------------------------------------------------------------
 # Core UI actions
 # ---------------------------------------------------------------------------
@@ -414,6 +424,7 @@ async def type_text(
     text: str, index: int | None = None, clear: bool = False, *, ctx: "ActionContext"
 ) -> ActionResult:
     """Type text into an indexed element or the currently focused input."""
+    text = _normalize_text(text)
     try:
         pre_ui = await _macro_pre_ui(ctx)
         if index is not None and index != -1:
@@ -450,6 +461,7 @@ async def type_text_direct(
     text: str, clear: bool = False, *, ctx: "ActionContext"
 ) -> ActionResult:
     """Type text into the currently focused input."""
+    text = _normalize_text(text)
     try:
         pre_ui = await _macro_pre_ui(ctx)
         success = await ctx.driver.input_text(text, clear)

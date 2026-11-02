@@ -3,10 +3,13 @@
 The order below is not incidental. Each step fixes a real failure mode the
 benchmark runners hit and paid for:
 
-1. **answer before score** — AndroidWorld/MobileWorld grade answer-style tasks
-   from the text submitted into the server's interaction cache, so an episode
-   that never submits one always scores 0 no matter how right the answer was
-   (``fix/benchmark-answer-submission``).
+1. **answer before score, when one was given** — AndroidWorld/MobileWorld
+   grade answer-style tasks from the text submitted into the server's
+   interaction cache, so an episode that never submits one always scores 0 no
+   matter how right the answer was (``fix/benchmark-answer-submission``). The
+   answer arrives on ``FinishRequest.answer``; the runner owns it because the
+   terminal ``complete`` action carries only a message. That message is prose
+   and is never submitted as an answer.
 2. **stabilize before score** — the environment scores the *live* accessibility
    tree; a snapshot taken mid-animation scores the wrong frame
    (``fix/benchmark-score-race``).

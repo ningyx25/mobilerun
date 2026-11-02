@@ -128,6 +128,27 @@ def test_finish_is_idempotent_and_closes_the_session():
         assert late.status_code == 409
 
 
+def test_answer_is_submitted_before_scoring():
+    seen_answers: list = []
+
+    def score(backend):
+        seen_answers.append(list(backend.answers))
+        return 1.0
+
+    backend = ScriptedBackend(tasks=["Alpha"], score_fn=score)
+    with make_client(backend) as client:
+        session_id = client.post("/v1/sessions", json={"task_id": "Alpha"}).json()[
+            "session_id"
+        ]
+        finished = client.post(
+            f"/v1/sessions/{session_id}/finish",
+            json={"declared_done": True, "answer": "42"},
+        ).json()
+
+    assert finished["score"] == 1.0
+    assert seen_answers == [["42"]]
+
+
 def test_undeclared_episode_is_gated_to_zero():
     backend = ScriptedBackend(tasks=["Alpha"], score=1.0)
     with make_client(backend) as client:

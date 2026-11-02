@@ -202,6 +202,22 @@ def test_open_app_promotes_recording_driver_start_app_log(monkeypatch):
     assert recorder.actions[0]["pre_state"]["nodes"]
 
 
+def test_type_text_records_the_normalized_text():
+    recorder = MacroRecorder()
+    ctx = SimpleNamespace(
+        driver=FakeDriver(),
+        ui=FakeUI(),
+        macro_recorder=recorder,
+        state_provider=SequencedStateProvider([FakeUI()]),
+    )
+
+    result = asyncio.run(type_text("\nhello\n", clear=True, ctx=ctx))
+
+    assert result.success
+    assert [action["action_type"] for action in recorder.actions] == ["input_text"]
+    assert recorder.actions[0]["text"] == "hello"
+
+
 def test_sequential_actions_record_refreshed_current_pre_state():
     first_ui = FakeUI()
     second_ui = FakeUI()

@@ -42,6 +42,11 @@ logger = logging.getLogger("mobilerun")
 _LONG_PRESS_MS = 1000.0
 
 
+def _strip_edges(value: object) -> str:
+    """Trim a free-text argument's edges; interior newlines survive."""
+    return str(value if value is not None else "").strip()
+
+
 def _to_device_point(
     x: float,
     y: float,
@@ -132,7 +137,11 @@ async def execute_action(
         return f"Dragged ({x1}, {y1}) -> ({x2}, {y2}) in {duration_s:.1f}s"
 
     if op == "type":
-        text = str(args.get("text", ""))
+        # Models wrap free text in stray newlines, and AndroidWorld turns each
+        # one into a real ENTER keypress (sibling repo:
+        # android_world/env/adb_utils.py:529-534). An edge newline therefore
+        # opens a dropdown instead of typing. Interior newlines are data.
+        text = _strip_edges(args.get("text", ""))
         clear = bool(args.get("clear", False))
         await driver.input_text(text, clear=clear)
         return f"Typed {len(text)} character(s)" + (" after clearing" if clear else "")

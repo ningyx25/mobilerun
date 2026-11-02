@@ -51,6 +51,9 @@ The following context is given to you for analysis:
 - **screenshots**: A visual screenshot of the current screen. Screenshots aren't saved in history, so note key details you'll need later.
 {%- endif %}
 - **phone_state**: The current app you are navigating in. This tells you which application context you're working within.
+{% if device_date %}
+- **device_date**: The device's current date and time is `{{ device_date }}`. Use it for questions about today, the current year, or relative times. The status bar often omits the year — never guess it.
+{% endif %}
 - **memory**: Your accumulated memory from previous steps (shown in `<memory>` tags). Use this to recall important facts without scanning history.
 - **chat history**: You are also given the history of your actions (if any) from your previous steps.
 - **tool results**: The result of your last tool call
