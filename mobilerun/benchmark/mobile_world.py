@@ -59,6 +59,7 @@ from mobilerun.benchmark.android_world import (
     _sanitize_name,
     _setup_benchmark_logging,
     _write_results,
+    _infra_error_reason,
 )
 from mobilerun.benchmark.evidence import EpisodeEvidence, gather_ui_tree
 from mobilerun.config_manager import ConfigLoader
@@ -643,6 +644,11 @@ async def run_mobileworld_benchmark(
                 result.success = bool(run_result.success)
                 result.steps = run_result.steps
                 result.reason = run_result.reason
+                # Transient provider failures become retriable errors so
+                # --resume re-runs the episode instead of keeping the 0.
+                infra_reason = _infra_error_reason(run_result)
+                if infra_reason:
+                    result.error = infra_reason
                 # Same completion gate as the reference runner: score only
                 # counts when the agent declared the episode finished.
                 if task_config.agent.reasoning:

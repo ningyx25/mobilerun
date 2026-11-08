@@ -6,7 +6,7 @@ tasks, mirroring the canonical episode flow of the reference docker eval
 runner (``android_world/run_on_docker.py``)::
 
     initialize -> goal -> complexity -> start_on_home_screen -> reset
-    -> agent episode (budget int(10 * complexity) steps) -> score -> tear_down
+    -> agent episode (budget _allocate_step_budget(complexity) steps) -> score -> tear_down
 
 Scores are computed server-side from the live device state at ``/task/score``
 time and are recorded both raw and "gated" the AndroidWorld way (0 unless the
@@ -45,6 +45,7 @@ from mobilerun.agent.external import list_agents
 from mobilerun.agent.utils.llm_loader import load_agent_llms
 from mobilerun.agent.utils.llm_picker import load_llm
 from mobilerun.benchmark.evidence import EpisodeEvidence, gather_ui_tree
+from mobilerun.harness.env_service.backend import _allocate_step_budget
 from mobilerun.config_manager import ConfigLoader
 from mobilerun.log_handlers import CLILogHandler, configure_logging
 from mobilerun.tools.driver.android_world import (
@@ -659,6 +660,37 @@ async def _submit_episode_answer(
         logger.warning("Submitting the episode answer failed: %s", exc)
 
 
+def _infra_error_reason(run_result: Any) -> str | None:
+    """Infra-failure reason from an episode result, if the episode died on one.
+
+    A transient provider failure (429 cooldown, request timeout, disconnect)
+    is absorbed by the agent into ``reason="Error: ..."`` with no exception,
+    so without this check ``--resume`` would treat the poisoned 0-score
+    record as final and never retry it. The explicit ``error_kind`` set by
+    MobileAgent wins; the reason-text scan is the fallback for older paths.
+    """
+    kind = getattr(run_result, "error_kind", None)
+    if kind:
+        reason = str(getattr(run_result, "reason", "") or "")
+        return f"InfraError: {reason[:300]}"
+    reason = str(getattr(run_result, "reason", "") or "")
+    if reason.startswith("Error:"):
+        text = reason.lower()
+        markers = (
+            "error code: 429",
+            "rate limit",
+            "model_cooldown",
+            "timed out",
+            "timeout",
+            "connection",
+            "temporarily unavailable",
+            "overloaded",
+        )
+        if any(marker in text for marker in markers):
+            return f"InfraError: {reason[:300]}"
+    return None
+
+
 def _new_run_id() -> str:
     """Identifier for one invocation of the benchmark runner."""
     return f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:4]}"
@@ -748,12 +780,14 @@ def _setup_benchmark_logging(debug: bool, verbose: bool) -> None:
         logging.getLogger("mobilerun").setLevel(logging.ERROR)
 
 
-def _print_summary(results: List[TaskResult]) -> None:
+def _print_summary(
+    results: List[TaskResult], title: str = "AndroidWorld Benchmark Summary"
+) -> None:
     completed = [result for result in results if result.error is None]
     scored = [result for result in completed if result.score is not None]
     errors = [result for result in results if result.error is not None]
 
-    table = Table(title="AndroidWorld Benchmark Summary")
+    table = Table(title=title)
     table.add_column("Metric", style="cyan")
     table.add_column("Value", style="white")
 
@@ -1114,7 +1148,7 @@ async def run_androidworld_benchmark(
                 # agent.reset(start_on_home_screen).
                 await client.reset(go_home=start_on_home)
 
-                max_steps = steps if steps is not None else int(10 * complexity)
+                max_steps = steps if steps is not None else _allocate_step_budget(complexity)
                 result.max_steps = max_steps
                 task_config = copy.deepcopy(config)
                 task_config.agent.max_steps = max_steps
@@ -1157,6 +1191,11 @@ async def run_androidworld_benchmark(
                 result.success = bool(run_result.success)
                 result.steps = run_result.steps
                 result.reason = run_result.reason
+                # Transient provider failures become retriable errors so
+                # --resume re-runs the episode instead of keeping the 0.
+                infra_reason = _infra_error_reason(run_result)
+                if infra_reason:
+                    result.error = infra_reason
                 # AndroidWorld gates the score on the agent declaring the
                 # episode finished. Direct mode: complete() ran, which sets
                 # shared_state.success and survives the run (FastAgent only

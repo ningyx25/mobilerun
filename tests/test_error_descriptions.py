@@ -264,3 +264,52 @@ def test_google_genai_json_wrapped_page_keeps_only_the_status_text() -> None:
     )
 
     assert describe_error(error) == "503 UNAVAILABLE HTML error page 'Just a moment...'"
+
+
+# ---------------------------------------------------------------------------
+# classify_llm_failure
+# ---------------------------------------------------------------------------
+
+from mobilerun.agent.utils.errors import classify_llm_failure
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        # HTTP 429 status
+        type("E429", (Exception,), {"status_code": 429})("rate limit"),
+        # HTTP 408 timeout
+        type("E408", (Exception,), {"status_code": 408})("timeout"),
+        # HTTP 503
+        type("E503", (Exception,), {"status_code": 503})("unavailable"),
+        # asyncio.TimeoutError / TimeoutError
+        asyncio.TimeoutError(),
+        TimeoutError("timed out"),
+        # error class name contains "timeout"
+        type("APITimeoutError", (Exception,), {})("request timed out"),
+        # error class name contains "ratelimit"
+        type("RateLimitError", (Exception,), {})("rate limit exceeded"),
+        # message text match
+        Exception("Error code: 429 - model_cooldown"),
+        Exception("service unavailable"),
+        Exception("bad gateway"),
+    ],
+)
+def test_classify_llm_failure_infra(error: BaseException) -> None:
+    assert classify_llm_failure(error) == "infra"
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        # genuine model/tool failures
+        Exception("I could not find the settings screen"),
+        ValueError("tool argument x must be int"),
+        Exception("agent declared task complete"),
+        # 400/401/403 are permanent, not infra
+        type("E400", (Exception,), {"status_code": 400})("bad request"),
+        type("E401", (Exception,), {"status_code": 401})("unauthorized"),
+    ],
+)
+def test_classify_llm_failure_non_infra(error: BaseException) -> None:
+    assert classify_llm_failure(error) is None

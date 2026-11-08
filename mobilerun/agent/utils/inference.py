@@ -1,5 +1,7 @@
 import asyncio
 import logging
+import random
+import re
 from typing import Optional, Type, TypeVar
 
 from llama_index.core.base.llms.types import (
@@ -173,11 +175,58 @@ def _is_permanent_http_client_error(error: Exception) -> bool:
     )
 
 
+
+# Retry pacing: honor the server's cooldown hint when it sends one (the
+# Qwen gateway returns 429 bodies like {"reset_seconds": 10}), otherwise
+# fall back to linear backoff. Jittered and capped so a busy shard cannot
+# re-saturate the quota the moment the cooldown expires.
+_RETRY_AFTER_MAX_SECONDS = 30.0
+_RESET_SECONDS_RE = re.compile(
+    r"['\"]?reset_seconds['\"]?\s*[:=]\s*(\d+(?:\.\d+)?)"
+)
+_RETRY_AFTER_RE = re.compile(
+    r"['\"]?retry-after['\"]?\s*[:=]\s*['\"]?(\d+(?:\.\d+)?)",
+    re.IGNORECASE,
+)
+
+
+def _retry_after_seconds(error: BaseException) -> float | None:
+    """Cooldown seconds requested by the server, parsed from the error text.
+
+    Rate-limit errors carry the hint in their string payload (SDKs flatten
+    response headers/body into ``str(exc)``); anything unparsable is None.
+    """
+    text = describe_error(error, max_chars=4000)
+    for pattern in (_RESET_SECONDS_RE, _RETRY_AFTER_RE):
+        match = pattern.search(text)
+        if match:
+            for group in match.groups():
+                if group is not None:
+                    return min(float(group), _RETRY_AFTER_MAX_SECONDS)
+    return None
+
+
+async def _sleep_between_attempts(
+    attempt: int, delay: float, error: BaseException | None
+) -> None:
+    backoff = delay * attempt
+    retry_after = _retry_after_seconds(error) if error is not None else None
+    if retry_after is not None:
+        backoff = max(backoff, retry_after)
+        if retry_after > delay * attempt:
+            logger.info(
+                "Retrying in %.1fs (server asked for %.1fs)",
+                backoff + random.random(),
+                retry_after,
+            )
+    backoff = min(backoff, _RETRY_AFTER_MAX_SECONDS)
+    await asyncio.sleep(backoff + random.random())
+
 async def acall_with_retries(
     llm,
     messages: list,
-    retries: int = 3,
-    timeout: float = 500,
+    retries: int = 6,
+    timeout: float = 300,
     delay: float = 1.0,
     stream: bool = False,
     **chat_kwargs,
@@ -242,7 +291,9 @@ async def acall_with_retries(
             last_exception = e
 
         if attempt < retries:
-            await asyncio.sleep(delay * attempt)
+            await _sleep_between_attempts(
+                attempt, delay, last_exception if isinstance(last_exception, BaseException) else None
+            )
 
     if last_exception:
         raise last_exception
@@ -297,8 +348,8 @@ async def _stream_response(
 async def acomplete_with_retries(
     llm,
     prompt: str,
-    retries: int = 3,
-    timeout: float = 500,
+    retries: int = 6,
+    timeout: float = 300,
     delay: float = 1.0,
     stream: bool = False,
 ) -> CompletionResponse:
@@ -351,7 +402,9 @@ async def acomplete_with_retries(
             last_exception = e
 
         if attempt < retries:
-            await asyncio.sleep(delay * attempt)
+            await _sleep_between_attempts(
+                attempt, delay, last_exception if isinstance(last_exception, BaseException) else None
+            )
 
     if last_exception:
         raise last_exception
@@ -401,8 +454,8 @@ async def astructured_predict_with_retries(
     llm,
     output_cls: Type[T],
     prompt: PromptTemplate,
-    retries: int = 3,
-    timeout: float = 500,
+    retries: int = 6,
+    timeout: float = 300,
     delay: float = 1.0,
     **prompt_args,
 ) -> T:
@@ -453,7 +506,9 @@ async def astructured_predict_with_retries(
             last_exception = e
 
         if attempt < retries:
-            await asyncio.sleep(delay * attempt)
+            await _sleep_between_attempts(
+                attempt, delay, last_exception if isinstance(last_exception, BaseException) else None
+            )
 
     if last_exception:
         raise last_exception

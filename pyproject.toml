@@ -90,6 +90,18 @@ langfuse = [
     "openinference-instrumentation-llama-index>=3.0.0",
     "llama-index-instrumentation"
 ]
+mobilegym = [
+    # `mobilerun runbench --benchmark-name mobilegym` embeds bench_env from the
+    # sibling mobilegym repository (PYTHONPATH=/path/to/mobilegym) and drives
+    # the simulator in-process with Playwright. After installing this extra,
+    # also run `playwright install chromium`.
+    # bench_env's own requirements minus openai (mobilerun pins its own
+    # llama-index-llms-openai stack; do not pull a conflicting openai here).
+    "playwright>=1.40",
+    "Pillow>=13.0.0",
+    "tqdm>=4.66",
+    "opencc-python-reimplemented>=0.1.7",
+]
 
 [build-system]
 requires = ["hatchling"]

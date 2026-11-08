@@ -54,6 +54,7 @@ from mobilerun.agent.utils.oauth.openai_oauth_llm import (
 )
 from mobilerun.agent.utils.portal_setup import portal_version_kwargs
 from mobilerun.benchmark.android_world import run_androidworld_benchmark
+from mobilerun.benchmark.mobile_gym import run_mobilegym_benchmark
 from mobilerun.benchmark.mobile_world import run_mobileworld_benchmark
 from mobilerun.cli.configure_wizard import (
     ConfigureWizardCallbacks,
@@ -725,7 +726,7 @@ async def run(
 @cli.command()
 @click.option(
     "--benchmark-name",
-    type=click.Choice(["androidworld", "mobileworld"]),
+    type=click.Choice(["androidworld", "mobileworld", "mobilegym"]),
     help="Benchmark to run",
     required=True,
 )
@@ -733,8 +734,9 @@ async def run(
     "--device",
     "-d",
     default=None,
-    help="Environment server URL (androidworld default http://localhost:5000, "
-    "mobileworld default http://localhost:6800)",
+    help="Environment server / simulator URL (androidworld default "
+    "http://localhost:5000, mobileworld default http://localhost:6800, "
+    "mobilegym default https://localhost:4180)",
 )
 @click.option("--config", "-c", "config_path", help="Path to config file", default=None)
 @click.option(
@@ -851,6 +853,26 @@ async def run(
     default=None,
     help="MobileWorld only: device id on the server (default emulator-5554)",
 )
+@click.option(
+    "--split",
+    default="test",
+    show_default=True,
+    help="MobileGym only: bench_env task split (e.g. test, train, payment, "
+    "test+payment, or a path to an id list)",
+)
+@click.option(
+    "--headless/--no-headless",
+    default=True,
+    show_default=True,
+    help="MobileGym only: launch Chromium headless",
+)
+@click.option(
+    "--startup-timeout",
+    type=float,
+    default=120.0,
+    show_default=True,
+    help="MobileGym only: seconds to wait for the simulator to become ready",
+)
 @coro
 async def runbench(
     benchmark_name: str,
@@ -881,8 +903,11 @@ async def runbench(
     enable_mcp: bool,
     enable_user_interaction: bool,
     device_id: str | None,
+    split: str,
+    headless: bool,
+    startup_timeout: float,
 ):
-    """Run a benchmark suite (AndroidWorld or MobileWorld) with the mobilerun agent."""
+    """Run a benchmark suite (AndroidWorld, MobileWorld or MobileGym)."""
     try:
         if benchmark_name.lower() == "mobileworld":
             if seed is not None or n_task_combinations is not None or task_idx:
@@ -904,6 +929,37 @@ async def runbench(
                 enable_mcp=enable_mcp,
                 enable_user_interaction=enable_user_interaction,
                 device_id=device_id,
+                save_trajectory=save_trajectory,
+                capture_evidence=evidence,
+                telemetry=telemetry,
+                provider=provider,
+                model=model,
+                base_url=base_url,
+                api_base=api_base,
+                temperature=temperature,
+                debug=debug,
+                verbose=verbose,
+                dry_run=dry_run,
+            )
+        elif benchmark_name.lower() == "mobilegym":
+            if seed is not None or n_task_combinations is not None or task_idx:
+                console.print(
+                    "[yellow]⚠️ --seed/--n-task-combinations/--task-idx do not "
+                    "apply to the mobilegym benchmark; ignoring them.[/]"
+                )
+            success = await run_mobilegym_benchmark(
+                sim_url=device,
+                config_path=config_path,
+                tasks=tasks,
+                task_index_range=task_index_range,
+                difficulty=difficulty,
+                split=split,
+                steps=steps,
+                output=output,
+                resume=resume,
+                headless=headless,
+                startup_timeout=startup_timeout,
+                task_timeout=task_timeout,
                 save_trajectory=save_trajectory,
                 capture_evidence=evidence,
                 telemetry=telemetry,

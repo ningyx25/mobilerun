@@ -144,6 +144,53 @@ def describe_error(error: BaseException, max_chars: int = _MAX_ERROR_CHARS) -> s
     return text
 
 
+# Transient transport/provider failures: the episode made no cognitive
+# progress and a retry can succeed, so benchmarks record them as infra
+# errors (retried on --resume) instead of agent failures (score 0).
+_INFRA_ERROR_MARKERS = (
+    "ratelimit",
+    "rate limit",
+    "model_cooldown",
+    "apitimeout",
+    "apiconnection",
+    "apirequest",
+    "connection error",
+    "connection reset",
+    "connection refused",
+    "remoteprotocolerror",
+    "server disconnected",
+    "request timed out",
+    "timed out",
+    "temporarily unavailable",
+    "service unavailable",
+    "bad gateway",
+    "gateway timeout",
+    "overloaded",
+)
+
+
+def classify_llm_failure(error: BaseException) -> str | None:
+    """Return ``"infra"`` for transient LLM/provider failures, else ``None``.
+
+    Covers rate limits (429, cooldowns), transport timeouts and connection
+    errors, and retryable HTTP statuses (408/429/5xx). Everything else —
+    model protocol errors, tool failures, agent-level exceptions — is the
+    agent's own failure and returns ``None``.
+    """
+    if isinstance(error, TimeoutError):  # incl. asyncio.TimeoutError
+        return "infra"
+    status = http_status_code(error)
+    if status is not None and (status in (408, 429) or status >= 500):
+        return "infra"
+    name = type(error).__name__.lower()
+    if any(marker in name for marker in ("ratelimit", "timeout", "connection")):
+        return "infra"
+    text = f"{name}: {describe_error(error, max_chars=400)}".lower()
+    if any(marker in text for marker in _INFRA_ERROR_MARKERS):
+        return "infra"
+    return None
+
+
 class HtmlErrorPageFilter(logging.Filter):
     """Shorten HTML error pages that third-party retry logs include verbatim."""
 

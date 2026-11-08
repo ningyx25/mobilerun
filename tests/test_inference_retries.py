@@ -541,3 +541,95 @@ def test_tool_only_replies_without_tools_exhaust_retries(stream) -> None:
         asyncio.run(acall_with_retries(llm, [], retries=2, delay=0, stream=stream))
 
     assert llm.requests == [{}, {}]
+
+
+# ---------------------------------------------------------------------------
+# Retry pacing: _retry_after_seconds and _sleep_between_attempts
+# ---------------------------------------------------------------------------
+
+from mobilerun.agent.utils.inference import _retry_after_seconds
+
+
+class RateLimitError(Exception):
+    pass
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        # Server returns reset_seconds in JSON body (Qwen gateway pattern)
+        (
+            "Error code: 429 - {'error': {'code': 'model_cooldown', 'reset_seconds': 10}}",
+            10.0,
+        ),
+        # Double-quoted JSON
+        ('429 - {"reset_seconds": 8, "reset_time": "8s"}', 8.0),
+        # Retry-After header flattened into exception string
+        ("429 - headers: {'retry-after': '12'}", 12.0),
+        # Value exceeds cap → clamped to 30
+        ("reset_seconds': 9999", 30.0),
+        # No hint → None
+        ("Error code: 429 - rate limit exceeded", None),
+        # Non-rate-limit error → None
+        ("connection refused", None),
+    ],
+)
+def test_retry_after_seconds_parses_hint(text: str, expected) -> None:
+    assert _retry_after_seconds(RateLimitError(text)) == expected
+
+
+def test_sleep_between_attempts_respects_server_hint() -> None:
+    """With a reset_seconds hint the sleep must be at least that long."""
+    from mobilerun.agent.utils.inference import _sleep_between_attempts
+
+    slept: list[float] = []
+
+    async def run():
+        import mobilerun.agent.utils.inference as inf_mod
+        original = inf_mod.asyncio.sleep
+
+        async def fake_sleep(secs):
+            slept.append(secs)
+
+        inf_mod.asyncio.sleep = fake_sleep
+        try:
+            await _sleep_between_attempts(
+                attempt=1,
+                delay=1.0,
+                error=RateLimitError(
+                    "429 - {'reset_seconds': 20}"
+                ),
+            )
+        finally:
+            inf_mod.asyncio.sleep = original
+
+    asyncio.run(run())
+    # sleep must be >= 20s (server hint) and <= 31s (cap + 1s jitter)
+    assert slept[0] >= 20.0
+    assert slept[0] <= 31.0
+
+
+def test_sleep_between_attempts_falls_back_to_linear_backoff() -> None:
+    """Without a hint, sleep scales as delay*attempt."""
+    from mobilerun.agent.utils.inference import _sleep_between_attempts
+
+    slept: list[float] = []
+
+    async def run():
+        import mobilerun.agent.utils.inference as inf_mod
+        original = inf_mod.asyncio.sleep
+
+        async def fake_sleep(secs):
+            slept.append(secs)
+
+        inf_mod.asyncio.sleep = fake_sleep
+        try:
+            await _sleep_between_attempts(
+                attempt=2, delay=3.0, error=Exception("generic error")
+            )
+        finally:
+            inf_mod.asyncio.sleep = original
+
+    asyncio.run(run())
+    # 2*3 = 6, plus up to 1s jitter
+    assert 6.0 <= slept[0] <= 7.0

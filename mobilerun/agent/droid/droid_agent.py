@@ -70,7 +70,7 @@ from mobilerun.agent.utils.android_device import (
     is_portal_http_url,
     resolve_android_serial,
 )
-from mobilerun.agent.utils.errors import describe_error
+from mobilerun.agent.utils.errors import classify_llm_failure, describe_error
 from mobilerun.agent.utils.llm_loader import (
     load_agent_llms,
     merge_llms_with_config,
@@ -119,6 +119,7 @@ from mobilerun.tools.driver.android_world import (
     AndroidWorldHttpDriver,
     looks_like_http_url,
 )
+from mobilerun.tools.driver.mobile_gym import MOBILE_GYM_CONNECTION
 from mobilerun.tools.driver.mobile_world import (
     MOBILE_WORLD_CONNECTION,
     MOBILE_WORLD_DEFAULT_URL,
@@ -814,6 +815,7 @@ class MobileAgent(Workflow):
             VISUAL_REMOTE_CONNECTION,
             ANDROID_WORLD_CONNECTION,
             MOBILE_WORLD_CONNECTION,
+            MOBILE_GYM_CONNECTION,
         }
         if control_backend and control_backend not in supported_backends:
             raise ValueError(
@@ -825,6 +827,7 @@ class MobileAgent(Workflow):
         if is_ios and control_backend in (
             ANDROID_WORLD_CONNECTION,
             MOBILE_WORLD_CONNECTION,
+            MOBILE_GYM_CONNECTION,
         ):
             # These drivers serve the Android-shaped state; the iOS state
             # provider would not understand it, so fail loudly instead of
@@ -1011,7 +1014,16 @@ class MobileAgent(Workflow):
             supported_buttons=driver.supported_buttons,
             credential_manager=self.credential_manager,
             platform="ios" if driver.platform.lower() == "ios" else "android",
-            exact_app_launch=is_visual_remote or self._using_jev,
+            # mobile-gym resolves app names/appIds exactly in the AWAKE
+            # action, so its episodes skip the AppStarter LLM round trip.
+            exact_app_launch=(
+                is_visual_remote
+                or self._using_jev
+                or _normalize_control_backend(
+                    self.resolved_device_config.control_backend
+                )
+                == MOBILE_GYM_CONNECTION
+            ),
             screenshot_only=getattr(
                 self.state_provider,
                 "requires_coordinate_tools",
@@ -1221,6 +1233,7 @@ class MobileAgent(Workflow):
                 success=False,
                 reason=f"Device disconnected: {e}",
                 instruction=ev.instruction,
+                error_kind="infra",
             )
 
         except Exception as e:
@@ -1229,7 +1242,10 @@ class MobileAgent(Workflow):
             if self.config.logging.debug:
                 logger.error(traceback.format_exc())
             return FastAgentResultEvent(
-                success=False, reason=f"Error: {error}", instruction=ev.instruction
+                success=False,
+                reason=f"Error: {error}",
+                instruction=ev.instruction,
+                error_kind=classify_llm_failure(e),
             )
 
     async def _execute_jev_task(
@@ -1305,7 +1321,11 @@ class MobileAgent(Workflow):
         self, ctx: Context, ev: FastAgentResultEvent
     ) -> FinalizeEvent:
         try:
-            return FinalizeEvent(success=ev.success, reason=ev.reason)
+            return FinalizeEvent(
+                success=ev.success,
+                reason=ev.reason,
+                error_kind=getattr(ev, "error_kind", None),
+            )
 
         except Exception as e:
             error = describe_error(e)
@@ -1359,7 +1379,9 @@ class MobileAgent(Workflow):
             result = await handler
         except DeviceDisconnectedError as e:
             logger.error(f"Device disconnected: {e}")
-            return FinalizeEvent(success=False, reason=f"Device disconnected: {e}")
+            return FinalizeEvent(
+                success=False, reason=f"Device disconnected: {e}", error_kind="infra"
+            )
         except ManagerResponseValidationError as e:
             logger.error(f"Manager response validation failed: {e}")
             return FinalizeEvent(success=False, reason=str(e))
@@ -1460,6 +1482,7 @@ class MobileAgent(Workflow):
             reason=ev.reason,
             steps=self.shared_state.step_number,
             structured_output=None,
+            error_kind=getattr(ev, "error_kind", None),
         )
         now = time.monotonic()
         workflow_deadline = await ctx.store.get(_WORKFLOW_DEADLINE_KEY, default=None)

@@ -312,6 +312,38 @@ def patch_benchmark(monkeypatch, client, agent_class, *, reasoning=False):
     FakeDriver.instances.clear()
 
 
+def test_infra_failure_records_error_for_resume(monkeypatch, tmp_path):
+    """A 429 absorbed into run_result.reason must become a retriable error."""
+    client = FakeTaskClient(tasks=("GuiTask",), score=0.0)
+    agent_class = make_fake_agent_class(
+        shared_success=None,
+        success=False,
+        reason=(
+            "Error: Error code: 429 - {'error': {'code': 'model_cooldown', "
+            "'reset_seconds': 10}}"
+        ),
+    )
+    patch_benchmark(monkeypatch, client, agent_class)
+    output = tmp_path / "results.json"
+
+    run(bench.run_mobileworld_benchmark(server_url="http://localhost:6800", output=str(output)))
+    row = json.loads(output.read_text())["tasks"][0]
+    assert row["error"] is not None
+    assert row["error"].startswith("InfraError")
+    assert row["gated_score"] == 0.0
+
+    # Resume re-runs because error is set.
+    client.calls.clear()
+    agent_class.instances.clear()
+    run(
+        bench.run_mobileworld_benchmark(
+            server_url="http://localhost:6800", output=str(output), resume=True
+        )
+    )
+    initialized = [c for c in client.calls if c[0] == "initialize"]
+    assert initialized == [("initialize", "GuiTask")]
+
+
 def test_episode_order_and_answer_before_evaluate(monkeypatch, tmp_path):
     client = FakeTaskClient(tasks=("GuiTask",), score=1.0)
     agent_class = make_fake_agent_class(shared_success=True, answer="313")

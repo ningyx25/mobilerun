@@ -565,7 +565,10 @@ async def open_app(text: str, *, ctx: "ActionContext") -> ActionResult:
     workflow = AppStarter(
         driver=ctx.driver,
         llm=ctx.app_opener_llm,
-        timeout=60,
+        # The workflow timeout must exceed the LLM call's own retry budget
+        # (attempt timeout x retries): with the 60s it used to be, any slow
+        # or rate-limited provider aborted open_app before a single retry.
+        timeout=180,
         stream=ctx.streaming,
         verbose=False,
     )
@@ -575,7 +578,11 @@ async def open_app(text: str, *, ctx: "ActionContext") -> ActionResult:
     result = await workflow.run(app_description=text)
     await asyncio.sleep(1)
 
-    if isinstance(result, str) and "could not open app" in result.lower():
+    if isinstance(result, str) and (
+        "could not open app" in result.lower()
+        or result.lower().startswith("failed")
+        or result.lower().startswith("error")
+    ):
         return ActionResult(success=False, summary=result)
     _record_driver_log_delta(ctx, driver_log_before, pre_ui=pre_ui)
     return ActionResult(success=True, summary=str(result))

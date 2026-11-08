@@ -47,6 +47,32 @@ logger = logging.getLogger("mobilerun")
 _MOBILE_WORLD_NON_GUI_TAGS = frozenset({"agent-mcp", "agent-user-interaction"})
 
 
+def _allocate_step_budget(complexity: Optional[float]) -> int:
+    """Mirror OpenMobile's ``_allocate_step_budget`` (AndroidWorld/suite_utils.py).
+
+    The reference runner uses tiered buckets, not a linear formula, which gives
+    complexity-1 tasks 30 steps rather than 10.  Using ``int(10 * complexity)``
+    cuts budgets by 3× for the most common tasks and causes ~43 avoidable
+    failures on the AndroidWorld 116-task suite.
+
+    complexity | budget (OpenMobile) | budget (int(10*c))
+    -----------|---------------------|-----------------
+    0          | 15                  | 0
+    1          | 30                  | 10
+    2          | 50                  | 20
+    >2         | 60                  | varies
+    """
+    if complexity is None:
+        return 50
+    if complexity == 0:
+        return 15
+    if complexity <= 1:
+        return 30
+    if complexity <= 2:
+        return 50
+    return 60
+
+
 class EnvBackend(ABC):
     """One device + one task family, addressable by the environment service."""
 
@@ -284,7 +310,7 @@ class AndroidWorldBackend(DriverBackend):
                     instruction="",
                     # Nominal budget for instance 0; prepare() recomputes the
                     # exact value for the instance it initializes.
-                    max_steps=int(10 * value) if value is not None else 50,
+                    max_steps=_allocate_step_budget(value),
                     complexity=value,
                     metadata=dict(meta),
                 )
@@ -336,7 +362,7 @@ class AndroidWorldBackend(DriverBackend):
             id=f"{task_id}#{task_idx}",
             backend=self.id,
             instruction=goal,
-            max_steps=int(params.get("max_steps") or int(10 * complexity)),
+            max_steps=int(params.get("max_steps") or _allocate_step_budget(complexity)),
             complexity=complexity,
             start_on_home_screen=start_on_home,
             metadata=meta,

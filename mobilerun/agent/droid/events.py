@@ -19,6 +19,9 @@ class FastAgentResultEvent(Event):
     success: bool
     reason: str
     instruction: str
+    # "infra" when the episode died on a transient provider/transport failure
+    # (429, timeout, disconnect): benchmarks record these as retriable errors.
+    error_kind: Optional[str] = None
 
 
 # ============================================================================
@@ -106,3 +109,4 @@ class ResultEvent(StopEvent):
     reason: str
     steps: int
     structured_output: Optional[BaseModel] = None
+    error_kind: Optional[str] = None

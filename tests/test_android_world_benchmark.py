@@ -516,10 +516,10 @@ def test_episode_order_and_gated_score(monkeypatch, tmp_path):
         ("tear_down", "ClockStopWatchRunning", 0),
     ]
 
-    # The agent ran with the canonical step budget (10 x complexity).
+    # The agent ran with OpenMobile's tiered step budget: complexity 1 -> 30.
     agent = agent_class.instances[0]
     assert agent.goal == "goal for ClockStopWatchRunning"
-    assert agent.config.agent.max_steps == 10
+    assert agent.config.agent.max_steps == 30
     assert agent.driver is FakeDriver.instances[0]
 
     data = json.loads(output.read_text())
@@ -994,6 +994,42 @@ def test_quiet_logging_raises_threshold(monkeypatch):
     assert logging.getLogger("mobilerun").level == logging.ERROR
     bench._setup_benchmark_logging(debug=False, verbose=True)
     assert logging.getLogger("mobilerun").level == logging.INFO
+
+
+def test_infra_failure_records_error_for_resume(monkeypatch, tmp_path):
+    """A 429 absorbed into run_result.reason must become a retriable error."""
+    output = tmp_path / "results.json"
+    client = FakeTaskClient(tasks=("SystemBluetoothTurnOn",), score=0.0)
+    agent_class = make_fake_agent_class(
+        shared_success=None,
+        success=False,
+        reason=(
+            "Error: Error code: 429 - {'error': {'code': 'model_cooldown', "
+            "'reset_seconds': 10}}"
+        ),
+    )
+    patch_benchmark(monkeypatch, client, agent_class)
+
+    success = run(
+        bench.run_androidworld_benchmark(
+            server_url="http://localhost:5000", output=str(output)
+        )
+    )
+    assert success is True
+    row = json.loads(output.read_text())["tasks"][0]
+    assert row["error"] is not None
+    assert row["error"].startswith("InfraError")
+
+    # Resume re-runs the episode because error is set.
+    client.calls.clear()
+    agent_class.instances.clear()
+    run(
+        bench.run_androidworld_benchmark(
+            server_url="http://localhost:5000", output=str(output), resume=True
+        )
+    )
+    initialized = [call for call in client.calls if call[0] == "initialize"]
+    assert initialized == [("initialize", "SystemBluetoothTurnOn", 0)]
 
 
 def test_resume_skips_recorded_and_reruns_failed(monkeypatch, tmp_path):
