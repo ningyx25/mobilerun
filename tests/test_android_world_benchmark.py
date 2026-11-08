@@ -516,10 +516,10 @@ def test_episode_order_and_gated_score(monkeypatch, tmp_path):
         ("tear_down", "ClockStopWatchRunning", 0),
     ]
 
-    # The agent ran with the canonical step budget (10 x complexity).
+    # The agent ran with OpenMobile's tiered step budget: complexity 1 -> 30.
     agent = agent_class.instances[0]
     assert agent.goal == "goal for ClockStopWatchRunning"
-    assert agent.config.agent.max_steps == 10
+    assert agent.config.agent.max_steps == 30
     assert agent.driver is FakeDriver.instances[0]
 
     data = json.loads(output.read_text())

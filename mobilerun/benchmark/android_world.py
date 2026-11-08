@@ -6,7 +6,7 @@ tasks, mirroring the canonical episode flow of the reference docker eval
 runner (``android_world/run_on_docker.py``)::
 
     initialize -> goal -> complexity -> start_on_home_screen -> reset
-    -> agent episode (budget int(10 * complexity) steps) -> score -> tear_down
+    -> agent episode (budget _allocate_step_budget(complexity) steps) -> score -> tear_down
 
 Scores are computed server-side from the live device state at ``/task/score``
 time and are recorded both raw and "gated" the AndroidWorld way (0 unless the
@@ -45,6 +45,7 @@ from mobilerun.agent.external import list_agents
 from mobilerun.agent.utils.llm_loader import load_agent_llms
 from mobilerun.agent.utils.llm_picker import load_llm
 from mobilerun.benchmark.evidence import EpisodeEvidence, gather_ui_tree
+from mobilerun.harness.env_service.backend import _allocate_step_budget
 from mobilerun.config_manager import ConfigLoader
 from mobilerun.log_handlers import CLILogHandler, configure_logging
 from mobilerun.tools.driver.android_world import (
@@ -1114,7 +1115,7 @@ async def run_androidworld_benchmark(
                 # agent.reset(start_on_home_screen).
                 await client.reset(go_home=start_on_home)
 
-                max_steps = steps if steps is not None else int(10 * complexity)
+                max_steps = steps if steps is not None else _allocate_step_budget(complexity)
                 result.max_steps = max_steps
                 task_config = copy.deepcopy(config)
                 task_config.agent.max_steps = max_steps
