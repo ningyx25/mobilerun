@@ -125,7 +125,7 @@ target-version = "py313"
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
-# ``agent-harness/`` is a standalone project with its own tests and venv.
+# ``agent-harness`` is a submodule with its own tests and venv.
 norecursedirs = [
     "agent-harness",
     "*.egg",
