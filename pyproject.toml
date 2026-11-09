@@ -105,6 +105,8 @@ target-version = "py313"
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
+# ``agent-harness`` is a submodule with its own tests and venv.
+norecursedirs = ["agent-harness", ".*", "*.egg", "_darcs", "build", "CVS", "dist", "node_modules", "venv"]
 
 [tool.ruff.lint]
 select = [
