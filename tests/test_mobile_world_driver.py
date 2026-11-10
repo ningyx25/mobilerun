@@ -256,6 +256,45 @@ def test_get_ui_tree_parses_uiautomator_into_portal_shape():
     }
 
 
+LETTERBOX_UI_XML = (
+    "<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>"
+    '<hierarchy rotation="0">'
+    '<node index="0" text="" resource-id="" class="android.widget.FrameLayout" '
+    'package="com.android.camera2" content-desc="" clickable="false" '
+    'bounds="[0,132][1080,2400]">'
+    '<node index="0" text="NEXT" resource-id="com.android.camera2:id/next" '
+    'class="android.widget.Button" package="com.android.camera2" '
+    'content-desc="" checkable="false" checked="false" clickable="true" '
+    'enabled="true" focusable="true" focused="false" scrollable="false" '
+    'long-clickable="false" selected="false" bounds="[351,2164][729,2290]"/>'
+    "</node></hierarchy>"
+)
+
+
+def test_get_ui_tree_overrides_letterbox_bounds_with_viewport():
+    """A window-relative a11y bounds union must not become the action space."""
+    handlers = _handlers()
+    handlers[("GET", "/xml")] = lambda r: httpx.Response(
+        200,
+        json={
+            "device": "emulator-5554",
+            "mode": "uia",
+            "content": LETTERBOX_UI_XML,
+        },
+    )
+    driver, _ = make_driver(handlers)
+    tree = run(driver.get_ui_tree())
+
+    assert tree["device_context"]["screen_bounds"] == {"width": 1080, "height": 2400}
+    # The tree keeps its own window-relative extent for filtering/clipping.
+    assert tree["a11y_tree"]["boundsInScreen"] == {
+        "left": 0,
+        "top": 132,
+        "right": 1080,
+        "bottom": 2400,
+    }
+
+
 def test_get_ui_tree_feeds_the_android_state_provider():
     from mobilerun.tools.filters import DetailedFilter
     from mobilerun.tools.formatters import IndexedFormatter

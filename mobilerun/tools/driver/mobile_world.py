@@ -489,8 +489,11 @@ class MobileWorldHttpDriver(DeviceDriver):
             timeout=_STATE_TIMEOUT,
         )
         parsed = _parse_hierarchy(str(data.get("content") or ""))
-        if "screen_bounds" not in parsed["device_context"]:
-            parsed["device_context"]["screen_bounds"] = await self._screen_size()
+        # The hierarchy's bounds union describes the current *window* (a dialog
+        # or a letterboxed app), not the physical screen. Using it as the input
+        # coordinate space makes normalized_1000 taps land off-target. /state's
+        # viewport_size comes from `adb shell wm size` and is authoritative.
+        parsed["device_context"]["screen_bounds"] = await self._screen_size()
         parsed["phone_state"] = await self._phone_state()
         return parsed
 

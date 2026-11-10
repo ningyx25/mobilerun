@@ -19,11 +19,13 @@ I/O is reimplemented here.
 from __future__ import annotations
 
 import asyncio
+import io
 import logging
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional
 
 import httpx
+from PIL import Image
 
 from mobilerun.harness.actions import screen_from_state, supported_ops
 from mobilerun.harness.protocol import (
@@ -45,6 +47,37 @@ logger = logging.getLogger("mobilerun")
 #: them unless explicitly enabled (``benchmark/mobile_world.py::_is_gui_task``),
 #: and the built-in agent cannot complete them.
 _MOBILE_WORLD_NON_GUI_TAGS = frozenset({"agent-mcp", "agent-user-interaction"})
+
+# MobileWorld's /step returns immediately and its server has no
+# wait_to_stabilize endpoint, so the post-action settle loop runs client-side.
+# Mirrors AndroidWorld's env/interface.py::_get_stable_state (consecutive
+# identical reads, reset on change, bounded deadline) and its controller's
+# get_stable_pixels (best effort: never fail an episode on a moving frame).
+MW_STABILITY_THRESHOLD = 3
+MW_STABILITY_SLEEP_S = 0.5
+MW_STABILITY_TIMEOUT_S = 6.0
+# Signature tuning: crop the status bar (its clock changes every minute),
+# downscale, and compare with a tolerance so animations/transitions are still
+# detected but a ticking clock is not mistaken for an unstable screen.
+MW_STATUS_BAR_FRACTION = 0.06
+MW_SETTLE_GRID = (24, 48)
+MW_SETTLE_TOL = 6
+
+
+def _settle_signature(png: bytes) -> bytes:
+    """A small, clock-insensitive fingerprint of a screenshot."""
+    with Image.open(io.BytesIO(png)) as image:
+        gray = image.convert("L")
+        cropped = gray.crop(
+            (0, int(gray.height * MW_STATUS_BAR_FRACTION), gray.width, gray.height)
+        )
+        return cropped.resize(MW_SETTLE_GRID).tobytes()
+
+
+def _frames_settled(a: bytes, b: bytes, *, tol: int = MW_SETTLE_TOL) -> bool:
+    if not a or len(a) != len(b):
+        return False
+    return sum(abs(x - y) for x, y in zip(a, b)) / len(a) <= tol
 
 
 def _allocate_step_budget(complexity: Optional[float]) -> int:
@@ -174,6 +207,15 @@ class DriverBackend(EnvBackend):
             if "get_ui_tree" in getattr(self.driver, "supported", set()):
                 state = await self.driver.get_ui_tree()
             input_size = await self._driver_input_size(width, height)
+            if input_size is None and state is not None:
+                # The PNG header is the authoritative physical geometry. A
+                # driver whose a11y tree reports a window-relative bounds union
+                # (dialog / letterbox) must not shrink the action coordinate
+                # space. A separate input space (iOS points) is left intact.
+                state.setdefault("device_context", {})["screen_bounds"] = {
+                    "width": width,
+                    "height": height,
+                }
         except httpx.TransportError as exc:
             # The device server dropped the connection. Surface it as a
             # retryable service error instead of a 500 traceback.
@@ -515,10 +557,45 @@ class MobileWorldBackend(DriverBackend):
         finally:
             self._active = None
 
+    async def stabilize(self) -> None:
+        """Block until the screen settles before the next observation.
+
+        The server's /step returns as soon as the input is injected, so an
+        immediate screenshot is the pre-transition (or half-rendered) frame.
+        Mirrors AndroidWorld's ``_get_stable_state``: count consecutive
+        identical signatures, reset on any change, stop at the threshold or
+        the deadline. Best effort throughout -- a screenshot failure or a
+        looping animation must never abort the episode.
+        """
+        try:
+            loop = asyncio.get_running_loop()
+            deadline = loop.time() + MW_STABILITY_TIMEOUT_S
+            previous: Optional[bytes] = None
+            stable_checks = 1
+            while stable_checks < MW_STABILITY_THRESHOLD and loop.time() < deadline:
+                started = loop.time()
+                signature = _settle_signature(await self.driver.screenshot())
+                if previous is not None and _frames_settled(previous, signature):
+                    stable_checks += 1
+                else:
+                    stable_checks = 1
+                previous = signature
+                if stable_checks >= MW_STABILITY_THRESHOLD:
+                    break
+                remaining = MW_STABILITY_SLEEP_S - (loop.time() - started)
+                sleep_for = min(
+                    max(0.0, remaining), max(0.0, deadline - loop.time())
+                )
+                if sleep_for > 0:
+                    await asyncio.sleep(sleep_for)
+        except Exception as exc:  # noqa: BLE001 - settle is best effort
+            logger.debug("MobileWorld stabilize failed: %s", exc)
+
     def capabilities(self) -> Capabilities:
         caps = super().capabilities()
         # The MobileWorld server exposes no stabilize endpoint; scoring reads
-        # the live device state without a settle step.
+        # the live device state without a settle step. Keep this False so
+        # finish_episode() still scores exactly once (scoring.py).
         return caps.model_copy(update={"supports_stabilize": False})
 
     def _require_active(self) -> TaskSpec:
