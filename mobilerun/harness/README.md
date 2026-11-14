@@ -209,6 +209,13 @@ four-process layout (process `i`, 1-based, owns one full stack):
 | agent service (`agent-harness serve`) | `9301 + (i-1)` |
 | model endpoint (sglang / OpenAI-compatible) | `29100 + (i-1)` |
 
+`--backend-kind mobile-world` switches the environment side to MobileWorld
+servers (`mw<port>=mobile-world@http://host:port`, one port = one device) and
+moves the backend port base to `6801`. The pre-flight then requires each
+backend's `/health` to report `{"ok": true}`, which is what the driver itself
+checks on connect. `--seed` / `--n-task-combinations` are AndroidWorld-only and
+are ignored (with a warning) for mobile-world.
+
 ```bash
 ./eval.sh                 # start environment + agent services, then evaluate
 ./eval.sh start           # services only

@@ -257,6 +257,15 @@ produces one full-suite score per model.
 | agent service | `9301 + (i-1)` |
 | model endpoint (sglang / OpenAI-compatible) | `29100 + (i-1)` |
 
+Both harness backends are supported. `--backend-kind mobile-world` switches the
+environment side to MobileWorld servers (one port = one device), whose port
+base then defaults to `6801`:
+
+```bash
+./eval.sh --backend-kind mobile-world          # 6801.., mobile-world@http://host:port
+./eval.sh --backend-kind mobile-world --backend-port-base 7001   # explicit base
+```
+
 ```bash
 ./eval.sh                 # start everything, then score every model on the full suite
 ./eval.sh start           # services only

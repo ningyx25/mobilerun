@@ -31,7 +31,8 @@
 #     --processes N             进程数（默认 4）
 #     --env-port-base N         环境服务端口基准（默认 9001）
 #     --agent-port-base N       智能体服务端口基准（默认 9301）
-#     --backend-port-base N     环境后端端口基准（默认 3801）
+#     --backend-kind KIND       环境后端类型：android-world（默认）| mobile-world
+#     --backend-port-base N     环境后端端口基准（默认 android-world 3801 / mobile-world 6801）
 #     --backends-per-env N      每个环境服务的后端数（默认 4）
 #     --model-port-base N       模型服务端口基准（默认 29100）
 #     --models a,b,c,d          各进程的模型名（默认从 /v1/models 自动读取）
@@ -55,6 +56,9 @@
 # 说明：
 #   * 环境服务启动时会对每个后端做 /health 连接，缺一个就起不来，所以 start
 #     前先做后端预检；不可用的后端会列出来。
+#   * mobile-world 后端用 680* 端口（一个端口 = 一台设备），后端规格写成
+#     mwN=mobile-world@http://host:port；--backend-kind mobile-world 会同时把
+#     端口基准切到 6801，并改用该后端需要的健康检查。
 #   * 每个进程写自己的结果文件，全部结束后汇总 runs/.../results/summary.json。
 #   * stop 只结束本次记录的 PID（先 eval，再 agent，最后 env）。
 #   * 服务在测评结束后保持运行，方便直接改参数重跑（./eval.sh eval）。
@@ -70,7 +74,8 @@ CMD="run"
 PROCS=4
 ENV_PORT_BASE=9001
 AGENT_PORT_BASE=9301
-BACKEND_PORT_BASE=3801
+BACKEND_KIND="android-world"
+BACKEND_PORT_BASE=""          # 留空 = 按 BACKEND_KIND 取默认值
 BACKENDS_PER_ENV=4
 MODEL_PORT_BASE=29100
 HOST="127.0.0.1"
@@ -290,6 +295,7 @@ while [ $# -gt 0 ]; do
     --processes)           PROCS="${2:?缺数值}"; shift 2 ;;
     --env-port-base)       ENV_PORT_BASE="${2:?缺数值}"; shift 2 ;;
     --agent-port-base)     AGENT_PORT_BASE="${2:?缺数值}"; shift 2 ;;
+    --backend-kind)        BACKEND_KIND="${2:?缺数值}"; shift 2 ;;
     --backend-port-base)   BACKEND_PORT_BASE="${2:?缺数值}"; shift 2 ;;
     --backends-per-env)    BACKENDS_PER_ENV="${2:?缺数值}"; shift 2 ;;
     --model-port-base)     MODEL_PORT_BASE="${2:?缺数值}"; shift 2 ;;
@@ -319,6 +325,19 @@ while [ $# -gt 0 ]; do
   esac
 done
 
+# 后端类型：统一成 harness 认的写法，并按类型给端口基准补默认值
+case "$BACKEND_KIND" in
+  android-world|androidworld|aw)   BACKEND_KIND="android-world";  _kind_prefix="aw" ;;
+  mobile-world|mobileworld|mw)     BACKEND_KIND="mobile-world";   _kind_prefix="mw" ;;
+  *) die "--backend-kind 只支持 android-world / mobile-world（当前: $BACKEND_KIND）" ;;
+esac
+if [ -z "$BACKEND_PORT_BASE" ]; then
+  case "$BACKEND_KIND" in
+    mobile-world) BACKEND_PORT_BASE=6801 ;;
+    *)            BACKEND_PORT_BASE=3801 ;;
+  esac
+fi
+
 for _n in PROCS BACKENDS_PER_ENV ENV_PORT_BASE AGENT_PORT_BASE BACKEND_PORT_BASE MODEL_PORT_BASE TASK_TIMEOUT; do
   case "${!_n}" in
     ''|*[!0-9]*) die "$_n 必须是正整数（当前: ${!_n}）" ;;
@@ -339,17 +358,33 @@ fi
 ACTIVE=()
 declare -A ACTIVE_BACKENDS=()
 
+# 后端是否真的能用。两类后端共用 /health，但 mobile-world 还要求返回
+# {"ok": true}（驱动会在 connect 时校验这个字段，只回 200 会在启动时炸）。
+backend_healthy() {
+  local port="$1"
+  case "$BACKEND_KIND" in
+    mobile-world)
+      local body
+      body="$(curl -fsS -m 8 "http://$HOST:$port/health" 2>/dev/null)" || return 1
+      printf '%s' "$body" | jq -e '.ok == true' >/dev/null 2>&1
+      ;;
+    *)
+      http_ok "http://$HOST:$port/health" 8
+      ;;
+  esac
+}
+
 preflight_backends() {
   local i j port ports down=()
   for ((i = 1; i <= PROCS; i++)); do
     ports=""
     for ((j = 1; j <= BACKENDS_PER_ENV; j++)); do
       port="$(backend_port "$i" "$j")"
-      if http_ok "http://$HOST:$port/health" 8; then
+      if backend_healthy "$port"; then
         ports+="${ports:+,}${port}"
       else
         down+=( "$port" )
-        warn "后端 :$port（进程 $i 的第 $j 个环境）不可用"
+        warn "后端 :$port（进程 $i 的第 $j 个 $BACKEND_KIND）不可用"
       fi
     done
     if [ -n "$ports" ]; then
@@ -360,11 +395,11 @@ preflight_backends() {
     fi
   done
   if [ "${#down[@]}" -gt 0 ] && [ "$ALLOW_DEGRADED" -eq 0 ]; then
-    die "以下环境后端不可用: ${down[*]}
+    die "以下 $BACKEND_KIND 后端不可用: ${down[*]}
     环境服务启动时会对每个后端做 /health 连接，缺一个就起不来。
-    请先恢复这些后端（ssh 隧道 / AndroidWorld 容器），或加 --allow-degraded。"
+    请先恢复这些后端（ssh 隧道 / 容器），或加 --allow-degraded。"
   fi
-  [ "${#ACTIVE[@]}" -gt 0 ] || die "没有任何可用的环境后端（端口 ${BACKEND_PORT_BASE}..$((BACKEND_PORT_BASE + PROCS * BACKENDS_PER_ENV - 1))）"
+  [ "${#ACTIVE[@]}" -gt 0 ] || die "没有任何可用的 $BACKEND_KIND 后端（端口 ${BACKEND_PORT_BASE}..$((BACKEND_PORT_BASE + PROCS * BACKENDS_PER_ENV - 1))）"
 }
 
 # ------------------------------ 预检：模型 ----------------------------------
@@ -424,10 +459,8 @@ start_env_services() {
     log="$(logfile_of env "$i")"
     specs=""
     for j in ${ACTIVE_BACKENDS[$i]//,/ }; do
-      specs+="${specs:+,}aw${j}=android-world@http://${HOST}:${j}"
+      specs+="${specs:+,}${_kind_prefix}${j}=${BACKEND_KIND}@http://${HOST}:${j}"
     done
-    port="$(env_port "$i")"
-    log="$(logfile_of env "$i")"
     if [ "$DRY_RUN" -eq 0 ] && port_in_use "$port"; then
       local holder; holder="$(port_owner "$port")"
       die "环境服务端口 $port 已被占用（进程 $i）${holder:+，占用者 pid=$holder $(ps -o args= -p "$holder" 2>/dev/null | cut -c1-90)}
@@ -592,8 +625,13 @@ cmd_eval() {
     [ "$RESUME" -eq 1 ]     && cmd+=( --resume )
     [ "$EVIDENCE" -eq 0 ]   && cmd+=( --no-evidence )
     [ "$DEBUG" -eq 1 ]      && cmd+=( --debug )
-    [ -n "$SEED" ]          && cmd+=( --seed "$SEED" )
-    [ -n "$NCOMB" ]         && cmd+=( --n-task-combinations "$NCOMB" )
+    # 套件种子/实例数只对 AndroidWorld 有意义；mobile-world 的套件由服务端固定
+    if [ "$BACKEND_KIND" = "android-world" ]; then
+      [ -n "$SEED" ]  && cmd+=( --seed "$SEED" )
+      [ -n "$NCOMB" ] && cmd+=( --n-task-combinations "$NCOMB" )
+    elif [ -n "$SEED$NCOMB" ]; then
+      warn "$BACKEND_KIND 不支持 --seed / --n-task-combinations，已忽略"
+    fi
 
     info "测评 $idx：模型 ${model:-?}，并发 $parallel，结果 $out"
     if [ "$DRY_RUN" -eq 1 ]; then
