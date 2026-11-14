@@ -242,6 +242,35 @@ Mobilerun is one piece of a toolkit for driving real phones with AI agents:
 - **[mobile-harness](https://github.com/droidrun/mobile-harness)**: an agent skill that lets Claude Code, Codex, and OpenClaw control Android, iOS, and cloud phones. App cards teach the agent how each app works, and shared memory keeps what it learns across tasks. It scores 100% on AndroidWorld and 98.34% on iOSWorld ([benchmark results](https://mobilerun.ai/benchmark/)).
 - **[Mobilerun Cloud](https://mobilerun.ai)**: cloud phones for AI agents. Hosted Android phones and dedicated iPhones for testing and running your agents on real devices, with phone numbers and inboxes so end to end flows like sign in and verification work in your own apps, devices in multiple regions for localized testing, and scheduled and event triggers. Drive it through the REST API, [Python](https://github.com/droidrun/mobilerun-sdk-python) and [TypeScript](https://github.com/droidrun/mobilerun-sdk-typescript) SDKs, or MCP, and watch every step live.
 
+## 🧪 Batch evaluation (`./eval.sh`)
+
+The repo ships a one-command runner for scoring **several models side by side**:
+each process owns a complete stack (environment service + agent service + one
+model endpoint) and runs the **entire** task suite against its own model. The
+processes do not split the task list — they split the models, so one run
+produces one full-suite score per model.
+
+| piece | port (process `i`, 1-based) |
+|---|---|
+| environment service | `9001 + (i-1)` |
+| environment backends (4 per service) | `3801 + 4*(i-1)` … `3804 + 4*(i-1)` |
+| agent service | `9301 + (i-1)` |
+| model endpoint (sglang / OpenAI-compatible) | `29100 + (i-1)` |
+
+```bash
+./eval.sh                 # start everything, then score every model on the full suite
+./eval.sh start           # services only
+./eval.sh eval            # evaluate against the running services (resumable)
+./eval.sh status | stop
+./eval.sh logs eval 1
+```
+
+Each model writes its own `results/<model>.json`; the run ends with
+`results/summary.json`, a model-by-model comparison table (mean score, gated
+score, completion rate, errors) sorted best-first. Run `./eval.sh --help` for
+the port bases, model selection and degraded-mode options. Implementation notes
+live in [`mobilerun/harness/README.md`](mobilerun/harness/README.md).
+
 ## 📚 Documentation
 
 - [Framework quickstart](https://docs.mobilerun.ai/framework/quickstart)

@@ -174,6 +174,38 @@ app = create_agent_app(ConfigLoader.load("fast.yaml"), name="fast-agent")
 uvicorn.run(app, host="0.0.0.0", port=9201)
 ```
 
+### One-command launch: `./eval.sh`
+
+`./eval.sh` at the repository root drives all three stages with the default
+four-process layout (process `i`, 1-based, owns one full stack):
+
+| piece | port |
+|---|---|
+| environment service | `9001 + (i-1)` |
+| environment backends (4 per service) | `3801 + 4*(i-1)` … `3804 + 4*(i-1)` |
+| agent service (`agent-harness serve`) | `9301 + (i-1)` |
+| model endpoint (sglang / OpenAI-compatible) | `29100 + (i-1)` |
+
+```bash
+./eval.sh                 # start environment + agent services, then evaluate
+./eval.sh start           # services only
+./eval.sh eval            # evaluate against the running services (resumable)
+./eval.sh status | stop   # process table / shutdown, scoped to this launch
+./eval.sh logs eval 2     # follow one process's log
+```
+
+Each process is one *model* under test: it runs the **whole** task suite and
+writes `results/<model>.json`. The processes are not task shards — a run with
+four models gives four full-suite scores, and `results/summary.json` compares
+them in one table. `--task-index-range A-B` narrows the suite for every model
+alike (a smoke run), it is not a per-process slice. Every launch gets its own
+directory under `runs/launch_<timestamp>/` (`logs/`, `pids/`, `configs/`,
+`results/`, `evidence/`, `procs.tsv`, `models.tsv`); `runs/latest_launch`
+points at the newest one. The environment service connects to every backend at
+startup and refuses to boot if one is down, so the script pre-flights the
+backend ports first — `--allow-degraded` skips the dead ones instead of
+aborting.
+
 `--parallel N` runs N episodes concurrently; each needs its own backend, so
 leave `--backend` unset and let the environment pick a free one. Without a
 pinned backend the per-backend copies of the catalogue are de-duplicated, so a
