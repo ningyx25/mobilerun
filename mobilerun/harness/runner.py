@@ -126,6 +126,64 @@ def _task_key(task: TaskSpec) -> str:
     return f"{name}#{int(idx_text or 0)}"
 
 
+def _failed_task_keys(path: Path) -> tuple[set[str], Dict[str, Any]]:
+    """Failed task keys and file-level meta from a previous results file.
+
+    "Failed" means a recorded row that was scored to exactly zero without an
+    infrastructure error. Error rows are deliberately excluded (``--resume``
+    retries those), and a partial score counts as a pass.
+
+    Parsed from the raw payload rather than through ``_load_results``: that
+    reader swallows read/parse errors, which would turn a mistyped path into
+    "nothing failed". Every malformed input is a ``ValueError``.
+    """
+    try:
+        text = path.read_text(encoding="utf-8")
+    except FileNotFoundError as exc:
+        raise ValueError(f"{path} does not exist") from exc
+    except IsADirectoryError as exc:
+        raise ValueError(
+            f"{path} is a directory, expected a results JSON file"
+        ) from exc
+    except OSError as exc:
+        raise ValueError(f"could not read {path}: {exc}") from exc
+
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise ValueError(
+            f"{path} is not valid JSON: {exc.msg} (line {exc.lineno})"
+        ) from exc
+    if not isinstance(payload, dict):
+        raise ValueError(f"{path} must contain a JSON object with a 'tasks' list")
+    rows = payload.get("tasks")
+    if not isinstance(rows, list):
+        raise ValueError(f"{path} has no 'tasks' list")
+
+    failed: set[str] = set()
+    for index, row in enumerate(rows):
+        if not isinstance(row, dict):
+            raise ValueError(f"{path} tasks[{index}] is not an object")
+        task_type = row.get("task_type")
+        if not isinstance(task_type, str) or not task_type:
+            raise ValueError(f"{path} tasks[{index}] has no string 'task_type'")
+        score = row.get("score")
+        if score is not None and (
+            isinstance(score, bool) or not isinstance(score, (int, float))
+        ):
+            raise ValueError(f"{path} tasks[{index}] has a non-numeric score")
+
+        key = f"{task_type}#{int(row.get('task_idx') or 0)}"
+        if row.get("error") is None and (score is None or score == 0.0):
+            failed.add(key)
+        else:
+            # A later duplicate row wins, matching _write_results' merge order.
+            failed.discard(key)
+
+    meta = {k: v for k, v in payload.items() if k not in ("tasks", "runs", "summary")}
+    return failed, meta
+
+
 async def _run_one(
     task: TaskSpec,
     *,
@@ -303,6 +361,7 @@ async def run_harness_suite(
     n_task_combinations: Optional[int] = None,
     output: Optional[str] = None,
     resume: bool = False,
+    rerun_fail: Optional[str] = None,
     health_timeout: float = 900.0,
     task_timeout: float = 1000.0,
     capture_evidence: bool = True,
@@ -335,6 +394,30 @@ async def run_harness_suite(
         else output_path.parent / f"{output_path.stem}_evidence"
     )
 
+    # Resolve --rerun-fail before any service wait: a bad path should fail
+    # immediately, not after the health timeout.
+    failed_keys: Optional[set[str]] = None
+    rerun_meta: Dict[str, Any] = {}
+    if rerun_fail:
+        try:
+            failed_keys, rerun_meta = _failed_task_keys(Path(rerun_fail))
+        except (OSError, ValueError) as exc:
+            console.print(f"[red]Error: {exc}[/]")
+            return False
+        if resume and output_path.resolve() == Path(rerun_fail).resolve():
+            console.print(
+                "[red]Error: --rerun-fail and --resume cannot use the same file: "
+                "every failed task is already recorded there, so resume would "
+                "skip them all.[/]"
+            )
+            return False
+        if not failed_keys:
+            console.print(
+                f"[green]No failed tasks in {rerun_fail} "
+                "(error is null and score == 0.0); nothing to re-run.[/]"
+            )
+            return True
+
     env = EnvClient(env_url, token=token)
     agent = AgentClient(agent_url, token=token)
     run_id = _new_run_id()
@@ -359,6 +442,10 @@ async def run_harness_suite(
         "seed": seed,
         "n_task_combinations": n_task_combinations,
         "resumed": resume,
+        "rerun_fail_from": str(Path(rerun_fail)) if rerun_fail else None,
+        "rerun_fail_failed_count": (
+            len(failed_keys) if failed_keys is not None else None
+        ),
         "parallel": parallel,
         "capture_evidence": capture_evidence,
         "results_path": str(output_path),
@@ -395,6 +482,29 @@ async def run_harness_suite(
                 task_index_range=task_index_range,
                 difficulty=difficulty,
             )
+            if failed_keys is not None:
+                # The path only selects; every other flag has already narrowed
+                # the suite above, so this is an intersection.
+                catalogue_keys = {_task_key(task) for task in catalogue}
+                unknown = sorted(failed_keys - catalogue_keys)
+                selected = [task for task in selected if _task_key(task) in failed_keys]
+                run_meta["rerun_fail_unknown"] = unknown
+                if unknown:
+                    shown = ", ".join(unknown[:10])
+                    console.print(
+                        f"[yellow]⚠️ {len(unknown)} failed task(s) from "
+                        f"{rerun_fail} are not in this catalogue: {shown}"
+                        f"{'…' if len(unknown) > 10 else ''}[/]"
+                    )
+                if not selected:
+                    raise ValueError(
+                        f"none of the {len(failed_keys)} failed task(s) in "
+                        f"{rerun_fail} are selectable with the current filters"
+                    )
+                console.print(
+                    f"♻️  Re-running {len(selected)} failed task(s) from "
+                    f"{rerun_fail}"
+                )
         except ValueError as exc:
             console.print(f"[red]Error: {exc}[/]")
             return False
@@ -470,6 +580,29 @@ async def run_harness_suite(
             console.print(
                 f"⏩ Resuming: {len(results)} recorded task(s) in {output_path}"
             )
+
+        if rerun_fail and rerun_meta:
+            # The keys are backend-independent, so a source from another
+            # deployment still selects; flag only the settings that would make
+            # the numbers incomparable. env_url/agent_url legitimately differ.
+            changed = [
+                field
+                for field in (
+                    "agent_id",
+                    "provider",
+                    "model",
+                    "backend",
+                    "seed",
+                    "n_task_combinations",
+                )
+                if rerun_meta.get(field) != run_meta.get(field)
+            ]
+            if changed:
+                console.print(
+                    "[yellow]⚠️ Re-running failed tasks recorded with different "
+                    f"{', '.join(changed)}; the new results may not be "
+                    "comparable to the source file.[/]"
+                )
 
         pending: List[TaskSpec] = []
         total = len(selected)

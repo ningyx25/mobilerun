@@ -160,7 +160,30 @@ mobilerun serve agent fast0=fast-agent@http://localhost:9201 \
 mobilerun eval --env http://localhost:9000 --agent http://localhost:9100 \
     --backend aw0 --agent-id fast0 --task-index-range 1-30 \
     --output runs/harness_aw.json --resume
+
+# retry only the tasks that failed in an earlier run
+mobilerun eval --env http://localhost:9000 --agent http://localhost:9100 \
+    --rerun-fail runs/qwen3vl8b_golden_aw.json \
+    --output runs/qwen3vl8b_rerun.json
 ```
+
+`--rerun-fail PATH` reads a completed results file and selects only its failed
+tasks. **Failed** means a row whose `error` is null and whose `score` is exactly
+`0.0`; an unscored row (`score: null`, no error) counts as failed too. Rows
+carrying an `error` are excluded — those are `--resume`'s job — and a partial
+score (`0 < score < 1`) is treated as a pass and is not retried.
+
+The file is only a selection source: every other option keeps its meaning.
+`--tasks`, `--task-index-range`, `--difficulty` and `--backend` narrow the suite
+first and the failed set is then intersected with it, so a range is 1-based over
+the catalogue and is not re-numbered over the failed subset. `--output` still
+defaults to a fresh `runs/harness_<timestamp>.json`, so the retry lands next to
+the original and the two files are comparable; pass the source as `--output` to
+merge the retried rows back in place (allowed, unless `--resume` is also set —
+then it is rejected, because resume would skip every failed row). Results
+record `rerun_fail_from`, `rerun_fail_failed_count` and any
+`rerun_fail_unknown` keys (failed tasks absent from this suite) in the run
+metadata.
 
 A worker is just the FastAPI app from `create_agent_app`; this project ships the
 factory, not a CLI command for it:

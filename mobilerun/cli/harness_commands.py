@@ -221,6 +221,15 @@ def serve_agent(
     help="AndroidWorld instance count per task (suite re-init)",
 )
 @click.option("--output", default=None, help="Results JSON path")
+@click.option(
+    "--rerun-fail",
+    "rerun_fail",
+    default=None,
+    metavar="PATH",
+    help="Previous results JSON; re-run only its failed tasks "
+    "(error is null and score == 0.0). Selection only: every other option "
+    "keeps its meaning.",
+)
 @click.option("--resume", is_flag=True, default=False, help="Skip recorded tasks")
 @click.option("--health-timeout", default=900.0, type=float)
 @click.option("--task-timeout", default=1000.0, type=float)
@@ -263,6 +272,7 @@ async def eval_command(
     seed: int | None,
     n_task_combinations: int | None,
     output: str | None,
+    rerun_fail: str | None,
     resume: bool,
     health_timeout: float,
     task_timeout: float,
@@ -296,6 +306,7 @@ async def eval_command(
         n_task_combinations=n_task_combinations,
         output=output,
         resume=resume,
+        rerun_fail=rerun_fail,
         health_timeout=health_timeout,
         task_timeout=task_timeout,
         capture_evidence=evidence,

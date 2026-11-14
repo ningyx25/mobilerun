@@ -175,6 +175,266 @@ def test_dry_run_lists_tasks_without_opening_sessions(tmp_path, monkeypatch):
     assert backend.prepared == []
 
 
+def _rerun_source(tmp_path, tasks, name="source.json"):
+    path = tmp_path / name
+    path.write_text(json.dumps({"tasks": tasks}))
+    return path
+
+
+_RERUN_SOURCE_ROWS = [
+    {"task_type": "Alpha", "task_idx": 0, "score": 1.0, "error": None},
+    {"task_type": "Beta", "task_idx": 0, "score": 0.0, "error": None},
+    {
+        "task_type": "Charlie",
+        "task_idx": 0,
+        "score": 0.0,
+        "error": "capacity: no free backend",
+    },
+    {"task_type": "Delta", "task_idx": 0, "score": 0.5, "error": None},
+    {"task_type": "Echo", "task_idx": 0, "score": None, "error": None},
+    {"task_type": "Zulu", "task_idx": 0, "score": 0.0, "error": None},
+]
+
+
+def test_rerun_fail_runs_only_failed_tasks(tmp_path, monkeypatch):
+    async def scenario():
+        backend = ScriptedBackend(tasks=["Alpha", "Beta", "Charlie", "Delta", "Echo"])
+        source = _rerun_source(tmp_path, _RERUN_SOURCE_ROWS)
+        output = tmp_path / "results.json"
+        async with _Wiring(backend, monkeypatch):
+            ok = await runner_module.run_harness_suite(
+                "http://env.test",
+                "http://agent.test",
+                output=str(output),
+                rerun_fail=str(source),
+                capture_evidence=False,
+                health_timeout=5.0,
+                task_timeout=30.0,
+            )
+            return ok, output, source, backend
+
+    ok, output, source, backend = _run(scenario())
+    assert ok is True
+    # Error rows (Charlie), partial scores (Delta) and passes (Alpha) are out;
+    # Zulu is failed but absent from this suite's catalogue.
+    assert backend.prepared == ["Beta", "Echo"]
+
+    payload = json.loads(output.read_text())
+    assert payload["selected_count"] == 2
+    assert payload["rerun_fail_from"] == str(source)
+    assert payload["rerun_fail_failed_count"] == 3
+    assert payload["rerun_fail_unknown"] == ["Zulu#0"]
+    assert {row["task_type"] for row in payload["tasks"]} == {"Beta", "Echo"}
+    assert payload["summary"]["tasks"] == 2
+    for row in payload["tasks"]:
+        assert row["score"] == 1.0
+        assert row["error"] is None
+        assert row["run_id"] == payload["run_id"]
+
+
+def test_rerun_fail_intersects_with_tasks_and_range(tmp_path, monkeypatch):
+    async def scenario():
+        backend = ScriptedBackend(tasks=["Alpha", "Beta", "Charlie", "Delta", "Echo"])
+        source = _rerun_source(tmp_path, _RERUN_SOURCE_ROWS)
+        async with _Wiring(backend, monkeypatch):
+            ok_tasks = await runner_module.run_harness_suite(
+                "http://env.test",
+                "http://agent.test",
+                output=str(tmp_path / "by_tasks.json"),
+                tasks="Alpha,Beta",
+                rerun_fail=str(source),
+                capture_evidence=False,
+                health_timeout=5.0,
+                task_timeout=30.0,
+            )
+            prepared_after_tasks = list(backend.prepared)
+            ok_range = await runner_module.run_harness_suite(
+                "http://env.test",
+                "http://agent.test",
+                output=str(tmp_path / "by_range.json"),
+                task_index_range="2-2",
+                rerun_fail=str(source),
+                capture_evidence=False,
+                health_timeout=5.0,
+                task_timeout=30.0,
+            )
+            return ok_tasks, ok_range, backend, prepared_after_tasks
+
+    ok_tasks, ok_range, backend, prepared_after_tasks = _run(scenario())
+    # --tasks cannot widen the failed set: Alpha passed, so only Beta runs.
+    assert ok_tasks is True
+    assert prepared_after_tasks == ["Beta"]
+    # The range is 1-based over the catalogue (2-2 is Beta), not re-numbered
+    # over the failed subset.
+    assert ok_range is True
+    assert backend.prepared == ["Beta", "Beta"]
+
+
+def test_rerun_fail_no_failures_is_a_noop(tmp_path, monkeypatch):
+    async def scenario():
+        backend = ScriptedBackend(tasks=["Alpha"])
+        source = _rerun_source(
+            tmp_path, [{"task_type": "Alpha", "task_idx": 0, "score": 1.0}]
+        )
+        output = tmp_path / "results.json"
+        async with _Wiring(backend, monkeypatch):
+            ok = await runner_module.run_harness_suite(
+                "http://env.test",
+                "http://agent.test",
+                output=str(output),
+                rerun_fail=str(source),
+                capture_evidence=False,
+                health_timeout=5.0,
+            )
+            return ok, output, backend
+
+    ok, output, backend = _run(scenario())
+    assert ok is True
+    assert backend.prepared == []
+    assert not output.exists()
+
+
+def test_rerun_fail_empty_intersection_fails(tmp_path, monkeypatch):
+    async def scenario():
+        backend = ScriptedBackend(tasks=["Alpha", "Beta"])
+        unknown_source = _rerun_source(
+            tmp_path,
+            [{"task_type": "Zulu", "task_idx": 0, "score": 0.0}],
+            name="unknown.json",
+        )
+        filtered_source = _rerun_source(
+            tmp_path,
+            [{"task_type": "Beta", "task_idx": 0, "score": 0.0}],
+            name="filtered.json",
+        )
+        async with _Wiring(backend, monkeypatch):
+            ok_unknown = await runner_module.run_harness_suite(
+                "http://env.test",
+                "http://agent.test",
+                output=str(tmp_path / "unknown_out.json"),
+                rerun_fail=str(unknown_source),
+                capture_evidence=False,
+                health_timeout=5.0,
+            )
+            ok_filtered = await runner_module.run_harness_suite(
+                "http://env.test",
+                "http://agent.test",
+                output=str(tmp_path / "filtered_out.json"),
+                tasks="Alpha",
+                rerun_fail=str(filtered_source),
+                capture_evidence=False,
+                health_timeout=5.0,
+            )
+            return ok_unknown, ok_filtered, backend, tmp_path
+
+    ok_unknown, ok_filtered, backend, tmp = _run(scenario())
+    assert ok_unknown is False
+    assert ok_filtered is False
+    assert backend.prepared == []
+    assert not (tmp / "unknown_out.json").exists()
+    assert not (tmp / "filtered_out.json").exists()
+
+
+def test_rerun_fail_dry_run_lists_the_filtered_subset(tmp_path, monkeypatch, capsys):
+    async def scenario():
+        backend = ScriptedBackend(tasks=["Alpha", "Beta", "Charlie", "Delta", "Echo"])
+        source = _rerun_source(tmp_path, _RERUN_SOURCE_ROWS)
+        output = tmp_path / "results.json"
+        async with _Wiring(backend, monkeypatch):
+            ok = await runner_module.run_harness_suite(
+                "http://env.test",
+                "http://agent.test",
+                output=str(output),
+                rerun_fail=str(source),
+                dry_run=True,
+                health_timeout=5.0,
+            )
+            return ok, output, backend
+
+    ok, output, backend = _run(scenario())
+    assert ok is True
+    assert backend.prepared == []
+    assert not output.exists()
+    printed = capsys.readouterr().out
+    assert "Beta" in printed
+    assert "Echo" in printed
+    assert "Alpha" not in printed
+
+
+def test_rerun_fail_rejects_bad_source_files(tmp_path):
+    import pytest as _pytest
+
+    from mobilerun.harness.runner import _failed_task_keys
+
+    cases = [
+        ("missing.json", None, "does not exist"),
+        ("bad.json", "{not json", "is not valid JSON"),
+        ("array.json", "[]", "must contain a JSON object"),
+        ("empty.json", "{}", "has no 'tasks' list"),
+        ("row.json", '{"tasks": [1]}', "is not an object"),
+        ("no_type.json", '{"tasks": [{"score": 0.0}]}', "task_type"),
+        (
+            "bad_score.json",
+            '{"tasks": [{"task_type": "A", "score": "0"}]}',
+            "non-numeric score",
+        ),
+    ]
+    for name, content, message in cases:
+        path = tmp_path / name
+        if content is not None:
+            path.write_text(content)
+        with _pytest.raises(ValueError, match=message):
+            _failed_task_keys(path)
+
+
+def test_failed_task_keys_dedupes_and_defaults_idx(tmp_path):
+    from mobilerun.harness.runner import _failed_task_keys
+
+    source = _rerun_source(
+        tmp_path,
+        [
+            # Duplicate key: the later row wins, so Beta is not failed.
+            {"task_type": "Beta", "task_idx": 0, "score": 0.0},
+            {"task_type": "Beta", "task_idx": 0, "score": 1.0},
+            {"task_type": "Alpha", "score": 0.0},
+            {"task_type": "Gamma", "task_idx": 2, "score": 0.0},
+        ],
+    )
+    failed, meta = _failed_task_keys(source)
+    assert failed == {"Alpha#0", "Gamma#2"}
+    assert "tasks" not in meta
+
+
+def test_eval_cli_forwards_rerun_fail(tmp_path, monkeypatch):
+    from unittest.mock import AsyncMock
+
+    from click.testing import CliRunner
+
+    import mobilerun.cli.main as cli_main
+
+    runner = AsyncMock(return_value=True)
+    monkeypatch.setattr(
+        "mobilerun.harness.runner.run_harness_suite", runner, raising=False
+    )
+
+    source = _rerun_source(tmp_path, [{"task_type": "Alpha", "rank": 0}])
+    result = CliRunner().invoke(
+        cli_main.cli,
+        [
+            "eval",
+            "--env",
+            "http://env.test",
+            "--agent",
+            "http://agent.test",
+            "--rerun-fail",
+            str(source),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert runner.await_args.kwargs["rerun_fail"] == str(source)
+
+
 def test_agent_id_flows_through_the_dispatcher(tmp_path, monkeypatch):
     async def scenario():
         backend = ScriptedBackend(tasks=["Alpha"])
