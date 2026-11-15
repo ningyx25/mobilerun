@@ -45,6 +45,10 @@
 #     --seed N                  套件随机种子（AndroidWorld）
 #     --n-task-combinations N   AndroidWorld 每任务实例数
 #     --no-resume               不跳过已记录的任务
+#     --rerun-fail              重跑各模型上一轮失败的题（error 为空且 score==0）
+#                               源文件自动取 <run-dir>/results/<模型>.json
+#                               结果写到 <模型>_rerun.json，原文件不动；隐含不传 --resume
+#     --rerun-fail-dir DIR      指定失败源所在的 results 目录（默认当前 run-dir）
 #     --no-evidence             不写证据包
 #     --no-debug                不打印 agent 实时事件
 #     --allow-degraded          后端不可用时只用健康的后端（默认直接中止）
@@ -91,6 +95,8 @@ MODELS=""
 OUTPUT=""
 PARALLEL=""
 RESUME=1
+RERUN_FAIL=0
+RERUN_FAIL_DIR=""
 TASK_TIMEOUT=3600
 TASK_INDEX_RANGE=""
 SEED=""
@@ -369,6 +375,8 @@ while [ $# -gt 0 ]; do
     --run-dir)             RUN_DIR="${2:?缺数值}"; shift 2 ;;
     --no-resume)           RESUME=0; shift ;;
     --resume)              RESUME=1; shift ;;
+    --rerun-fail)          RERUN_FAIL=1; shift ;;
+    --rerun-fail-dir)      RERUN_FAIL=1; RERUN_FAIL_DIR="${2:?缺目录}"; shift 2 ;;
     --no-evidence)         EVIDENCE=0; shift ;;
     --evidence)            EVIDENCE=1; shift ;;
     --no-debug)            DEBUG=0; shift ;;
@@ -766,8 +774,9 @@ cmd_eval() {
     apply_pool_seed "${shards[0]}"
   fi
 
-  local idx out parallel log pid eport aport model safe_model
+  local idx out parallel log pid eport aport model safe_model src
   local -a launched=()
+  local -a skipped_rerun=()
   for idx in "${shards[@]}"; do
     # 每个进程一个结果文件：与它的模型绑定，而不是与任务切片绑定
     model="$(model_of_shard "$idx")"
@@ -778,6 +787,19 @@ cmd_eval() {
         *.json) out="${OUTPUT%.json}_${safe_model}.json" ;;
         *)      out="${OUTPUT}_${safe_model}.json" ;;
       esac
+    fi
+
+    src=""
+    if [ "$RERUN_FAIL" -eq 1 ]; then
+      local src_dir; src_dir="${RERUN_FAIL_DIR:-$RUN_DIR/results}"
+      src="$src_dir/${safe_model}.json"
+      if [ ! -f "$src" ]; then
+        warn "模型 ${model:-?} 没有源结果文件（$src），跳过"
+        skipped_rerun+=( "$idx" )
+        continue
+      fi
+      # 重跑结果另存，基线文件保持不动
+      out="$RUN_DIR/results/${safe_model}_rerun.json"
     fi
 
     eport="$(eval_env_port "$idx")"
@@ -794,15 +816,23 @@ cmd_eval() {
     fi
 
     log="$(logfile_of eval "$idx")"
+    # 证据目录按任务名分桶（<task>_<idx>）写入且不清理已有内容，重跑会直接
+    # 覆盖掉基线那一轮的截图与轨迹。重跑因此落到独立目录，基线证据保持可回溯。
+    local evdir="$RUN_DIR/evidence/p${idx}"
+    [ "$RERUN_FAIL" -eq 1 ] && evdir="$RUN_DIR/evidence/p${idx}_rerun"
     local -a cmd=( "$MOBILERUN_BIN" eval
       --env "http://$HOST:$eport"
       --agent "http://$HOST:$aport"
       --parallel "$parallel"
       --task-timeout "$TASK_TIMEOUT"
-      --evidence-dir "$RUN_DIR/evidence/p${idx}"
+      --evidence-dir "$evdir"
       --output "$out" )
     [ -n "$TASK_INDEX_RANGE" ] && cmd+=( --task-index-range "$TASK_INDEX_RANGE" )
-    [ "$RESUME" -eq 1 ]     && cmd+=( --resume )
+    if [ "$RERUN_FAIL" -eq 1 ]; then
+      cmd+=( --rerun-fail "$src" )
+    else
+      [ "$RESUME" -eq 1 ] && cmd+=( --resume )
+    fi
     [ "$EVIDENCE" -eq 0 ]   && cmd+=( --no-evidence )
     [ "$DEBUG" -eq 1 ]      && cmd+=( --debug )
     # 套件种子/实例数只对 AndroidWorld 有意义；mobile-world 的套件由服务端固定。
@@ -816,7 +846,11 @@ cmd_eval() {
       [ -n "$NCOMB" ] && cmd+=( --n-task-combinations "$NCOMB" )
     fi
 
-    info "测评 $idx：模型 ${model:-?}，并发 $parallel，结果 $out"
+    if [ "$RERUN_FAIL" -eq 1 ]; then
+      info "重跑 $idx：模型 ${model:-?}，失败源 $src，并发 $parallel，结果 $out"
+    else
+      info "测评 $idx：模型 ${model:-?}，并发 $parallel，结果 $out"
+    fi
     if [ "$DRY_RUN" -eq 1 ]; then
       printf '    (dry-run) %s\n' "${cmd[*]}" >&2
       continue
@@ -831,8 +865,18 @@ cmd_eval() {
     record_proc eval "$idx" "0" "$pid" "$log"
   done
 
+  if [ "${#skipped_rerun[@]}" -gt 0 ]; then
+    info "跳过 ${#skipped_rerun[@]} 个没有源结果文件的模型: ${skipped_rerun[*]}"
+  fi
+
   [ "$DRY_RUN" -eq 1 ] && { info "dry-run：未执行测评"; return 0; }
-  [ "${#launched[@]}" -gt 0 ] || die "没有启动任何测评进程"
+  if [ "${#launched[@]}" -eq 0 ]; then
+    if [ "$RERUN_FAIL" -eq 1 ]; then
+      warn "没有任何模型有可重跑的源结果文件（源目录: ${RERUN_FAIL_DIR:-$RUN_DIR/results}）"
+      return 0
+    fi
+    die "没有启动任何测评进程"
+  fi
 
   info "已启动 ${#launched[@]} 个测评进程（每进程一个模型、各自跑完整任务集），等待全部结束"
   local failed=0 entry
@@ -852,14 +896,24 @@ cmd_eval() {
 }
 
 aggregate_results() {
+  # 重跑文件（*_rerun.json）只含失败子集，混进主表会让那一行指标失真，
+  # 所以单独收集，主表只统计完整的基线文件。
   local -a files=()
+  local -a rerun_files=()
   local f
   for f in "$RUN_DIR"/results/*.json; do
     [ -f "$f" ] || continue
-    case "$f" in */summary.json) continue ;; esac
-    files+=( "$f" )
+    case "$f" in */summary.json|*/.model-map.json) continue ;; esac
+    case "$(basename "$f")" in
+      *_rerun.json) rerun_files+=( "$f" ) ;;
+      *)            files+=( "$f" ) ;;
+    esac
   done
-  [ "${#files[@]}" -gt 0 ] || { warn "没有结果文件可汇总"; return 0; }
+  [ "${#files[@]}" -gt 0 ] || {
+    [ "${#rerun_files[@]}" -gt 0 ] && show_rerun_summary
+    warn "没有结果文件可汇总"
+    return 0
+  }
 
   # 结果文件 → 模型名：结果文件名就是清洗后的模型名；清洗会丢字符，
   # 所以再拿 models.tsv 按「清洗后相等」回查原始名。
@@ -922,6 +976,45 @@ aggregate_results() {
       | $m[] | "\(.model)\t\(.mean_gated_score - $best)"' "$merged" \
       | awk -F'\t' '{printf "  %-24s %+.4f\n", $1, $2}'
   fi
+
+  show_rerun_summary
+}
+
+# 重跑增量：*_rerun.json 只含失败子集，不与主表混算。这里给出每个模型的
+# 「重跑 N 题 / 成功 M 题」，并在有完整基线时给出合并后的估计分（仅展示）。
+show_rerun_summary() {
+  local -a rerun_files=()
+  local f
+  for f in "$RUN_DIR"/results/*_rerun.json; do
+    [ -f "$f" ] || continue
+    rerun_files+=( "$f" )
+  done
+  [ "${#rerun_files[@]}" -gt 0 ] || return 0
+
+  printf '\n重跑增量（失败子集，不计入上表）:\n'
+  printf '  %-24s %5s %7s %8s %s\n' MODEL TASKS RUN_OK MEAN_RERUN "合并后(估计)"
+  local rf stem base merged_est
+  for rf in "${rerun_files[@]}"; do
+    stem="$(basename "$rf" _rerun.json)"
+    base="$RUN_DIR/results/${stem}.json"
+    merged_est=""
+    if [ -f "$base" ]; then
+      # 按 task_type#task_idx 把重跑行覆盖到基线行上，再算均值
+      merged_est="$(jq -rs '
+        .[0] as $old | .[1] as $new
+        | (($old.tasks // []) | map({key: "\(.task_type)#\(.task_idx)", value: .}) | from_entries) as $m
+        | (($new.tasks // []) | map({key: "\(.task_type)#\(.task_idx)", value: .}) | from_entries) as $n
+        | ($m + $n) | [.[] | .score] | map(select(. != null))
+        | if length > 0 then ((add / length) * 10000 | floor) / 10000 else null end
+      ' "$base" "$rf" 2>/dev/null)"
+      [ -n "$merged_est" ] && [ "$merged_est" != "null" ] || merged_est=""
+    fi
+    jq -r --arg est "${merged_est:-—}" '
+      "\(.summary.tasks // 0)\t\([.tasks[]? | select((.error == null) and ((.score // 0) > 0))] | length)\t\((.summary.mean_score // 0) * 10000 | floor | . / 10000)"' \
+      "$rf" | awk -F'\t' -v m="$stem" -v e="$merged_est" \
+      '{printf "  %-24s %5s %7s %8.4f %s\n", m, $1, $2, $3, (e == "" ? "—" : sprintf("%.4f", e))}'
+  done
+  printf '  （合并后(估计) = 用重跑结果覆盖基线同题后的全量平均分，仅供参考）\n'
 }
 
 # --------------------------------- 状态 -------------------------------------
