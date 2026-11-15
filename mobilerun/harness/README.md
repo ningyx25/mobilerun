@@ -216,6 +216,22 @@ backend's `/health` to report `{"ok": true}`, which is what the driver itself
 checks on connect. `--seed` / `--n-task-combinations` are AndroidWorld-only and
 are ignored (with a warning) for mobile-world.
 
+`--pool` changes the topology: instead of one environment service per process,
+a single service owns every backend and all evaluation processes lease from it.
+That is the dynamic-scheduling mode — when one model's episode ends its backend
+lease is released, and another process's queued task picks it up on its next
+`capacity` retry (`runner.py::_run_with_capacity_retry`, no code change needed,
+because the env service already hands out the first free backend at
+`session.py::_pick_backend`). Two consequences worth knowing:
+
+- The shared service is a single point of failure for every process, and all
+  device I/O runs on one event loop.
+- `--seed` / `--n-task-combinations` must **not** be passed to the individual
+  runners in pool mode: each runner would walk every backend and reinitialize
+  the suite, and that endpoint is unguarded (`app.py`), so concurrent resets
+  would clobber each other's in-flight episodes. `eval.sh` applies the seed
+  once to all backends before starting the runners and then omits the flags.
+
 ```bash
 ./eval.sh                 # start environment + agent services, then evaluate
 ./eval.sh start           # services only

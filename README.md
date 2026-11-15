@@ -266,6 +266,22 @@ base then defaults to `6801`:
 ./eval.sh --backend-kind mobile-world --backend-port-base 7001   # explicit base
 ```
 
+By default each process owns its own environment service and its 4 backends, so
+a process that finishes early leaves its devices idle. `--pool` instead starts
+**one** environment service holding every backend and lets all processes lease
+from that shared pool — whichever model finishes an episode frees its backend
+for any other model still running:
+
+```bash
+./eval.sh --pool              # 1 env service (:9001) + N agent services, shared backends
+```
+
+Pool mode defaults each process to `ceil(backends/processes) + 2` concurrent
+episodes (16 backends / 4 models → 6) so early finishers can absorb freed
+backends without starving anyone. Because the environment service becomes a
+single point of failure and all device I/O funnels through one event loop,
+pool mode is opt-in.
+
 ```bash
 ./eval.sh                 # start everything, then score every model on the full suite
 ./eval.sh start           # services only

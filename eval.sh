@@ -48,6 +48,8 @@
 #     --no-evidence             不写证据包
 #     --no-debug                不打印 agent 实时事件
 #     --allow-degraded          后端不可用时只用健康的后端（默认直接中止）
+#     --pool                    池模式：只起一个环境服务统管全部后端，所有进程
+#                               动态租用它（空闲后端可被其他进程接管）
 #     --no-model-check          跳过模型服务健康检查
 #     --host ADDR               监听地址（默认 127.0.0.1）
 #     --run-dir DIR             指定运行目录（默认 runs/launch_<时间戳>）
@@ -62,6 +64,10 @@
 #   * 每个进程写自己的结果文件，全部结束后汇总 runs/.../results/summary.json。
 #   * stop 只结束本次记录的 PID（先 eval，再 agent，最后 env）。
 #   * 服务在测评结束后保持运行，方便直接改参数重跑（./eval.sh eval）。
+#   * --pool：非池模式下进程 i 独占自己的 4 个后端；池模式下只起 env:9001
+#     统管全部后端，所有测评进程共用一个租约池 —— 某个进程跑完放出后端，
+#     其他还在跑的进程立刻能抢到。代价是 env 成为单点，且设备 I/O 汇聚到
+#     同一个事件循环，所以默认关闭。
 # =============================================================================
 set -uo pipefail
 
@@ -94,6 +100,7 @@ EVIDENCE=1
 DEBUG=1
 ALLOW_DEGRADED=0
 SKIP_MODEL_CHECK=0
+POOL=0
 DRY_RUN=0
 RUN_DIR=""
 
@@ -143,6 +150,31 @@ port_owner() {
     }'
 }
 
+# 某个 PID 属于哪个 run 目录（按 procs.tsv 反查）；找不到输出空。
+# 共享 runs/ 下可能有别的机器的记录，所以还要确认目录在本机存在。
+run_dir_of_pid() {
+  local pid="$1" f d
+  # 先看本次要用的 RUN_DIR（可能是 --run-dir 指定的任意路径）；
+  # prepare_run_dir 已把上一版记录备份成 procs.tsv.prev，两个都查。
+  if [ -n "${RUN_DIR:-}" ]; then
+    for f in "$RUN_DIR/procs.tsv" "$RUN_DIR/procs.tsv.prev"; do
+      [ -f "$f" ] || continue
+      if awk -F'\t' -v p="$pid" '$4 == p { found = 1 } END { exit !found }' "$f"; then
+        printf '%s' "$RUN_DIR"; return 0
+      fi
+    done
+  fi
+  for f in "$RUNS_ROOT"/launch_*/procs.tsv "$RUNS_ROOT"/launch_*/procs.tsv.prev; do
+    [ -f "$f" ] || continue
+    d="$(dirname "$f")"
+    [ -d "$d" ] || continue
+    if awk -F'\t' -v p="$pid" '$4 == p { found = 1 } END { exit !found }' "$f"; then
+      printf '%s' "$d"; return 0
+    fi
+  done
+  return 1
+}
+
 require_tools() {
   command -v curl >/dev/null 2>&1 || die "需要 curl"
   command -v jq   >/dev/null 2>&1 || die "需要 jq（配置生成与结果汇总都要用）"
@@ -161,10 +193,21 @@ backend_port() { echo $((BACKEND_PORT_BASE + ($1 - 1) * BACKENDS_PER_ENV + $2 - 
 pidfile_of() { printf '%s/pids/%s_%s.pid' "$RUN_DIR" "$1" "$2"; }
 logfile_of() { printf '%s/logs/%s_%s.log' "$RUN_DIR" "$1" "$2"; }
 
+# runs/ 可能被多台机器共享（同一块 /fs1），所以：
+#   * 指针按主机名隔离，避免 node02 / node03 互相覆盖；
+#   * 再回落到不带主机名的旧指针（兼容历史目录）；
+#   * 指向的目标必须在本机真实存在（排除别的机器的 /tmp 路径）。
 latest_run_dir() {
-  local link="$RUNS_ROOT/latest_launch"
-  [ -L "$link" ] && [ -d "$link" ] && { readlink -f -- "$link"; return 0; }
-  [ -f "$link" ] && { cat "$link"; return 0; }
+  local link d
+  for link in "$RUNS_ROOT/latest_launch.$(hostname)" "$RUNS_ROOT/latest_launch"; do
+    if [ -L "$link" ]; then
+      d="$(readlink -f -- "$link" 2>/dev/null)"
+      [ -n "$d" ] && [ -d "$d" ] && { printf '%s' "$d"; return 0; }
+    elif [ -f "$link" ]; then
+      d="$(cat "$link")"
+      [ -n "$d" ] && [ -d "$d" ] && { printf '%s' "$d"; return 0; }
+    fi
+  done
   return 1
 }
 
@@ -187,6 +230,15 @@ recorded_indices() {
 # 进程 i 的 env / agent 端口：优先用 start 时记录的，缺失则按基准推算
 shard_env_port()   { lookup_port env "$1"   2>/dev/null || env_port   "$1"; }
 shard_agent_port() { lookup_port agent "$1" 2>/dev/null || agent_port "$1"; }
+
+# 测评进程 idx 该连哪个环境服务：池模式下所有进程都连同一个 env:9001
+eval_env_port() {
+  if [ "$POOL" -eq 1 ]; then
+    lookup_port env 1 2>/dev/null || env_port 1
+  else
+    shard_env_port "$1"
+  fi
+}
 
 # 进程 i 被测的模型名：优先读 start 时记下的 models.tsv，其次 configs/p<i>.json，
 # 再退回本次预检结果，最后退回模型端点自报的名字。
@@ -221,11 +273,15 @@ spawn() {
     return 0
   fi
   mkdir -p "$(dirname "$log")" "$(dirname "$pidfile")"
+  # 必须先清掉旧 pidfile：复用 --run-dir 时它带着上一轮的 PID，而下面的
+  # 等待条件是「文件非空」—— 不清就会立刻读到那个已经死掉的旧 PID，
+  # wait_http 随即判定「启动失败」，而新进程其实正在正常启动。
+  rm -f "$pidfile"
   printf '===== %s  log start =====\n' "$(date '+%F %T')" >> "$log"
   setsid /bin/bash -c 'echo $$ > "$1"; shift; exec "$@"' _ "$pidfile" "$@" \
     >> "$log" 2>&1 < /dev/null &
   wrapper=$!
-  for w in 1 2 3 4 5 6 7 8 9 10; do
+  for w in $(seq 1 50); do
     [ -s "$pidfile" ] && break
     sleep 0.2
   done
@@ -318,6 +374,8 @@ while [ $# -gt 0 ]; do
     --no-debug)            DEBUG=0; shift ;;
     --debug)               DEBUG=1; shift ;;
     --allow-degraded)      ALLOW_DEGRADED=1; shift ;;
+    --pool)                POOL=1; shift ;;
+    --no-pool)             POOL=0; shift ;;
     --no-model-check)      SKIP_MODEL_CHECK=1; shift ;;
     --dry-run)             DRY_RUN=1; shift ;;
     -h|--help)             usage; exit 0 ;;
@@ -355,8 +413,17 @@ fi
 [ -n "$PARALLEL" ] && { case "$PARALLEL" in ''|*[!0-9]*) die "--parallel 必须是正整数";; esac; }
 
 # ------------------------------ 预检：后端 ----------------------------------
+# ACTIVE          —— 有可用后端的槽位；非池模式下即「进程号」，池模式下恒为 (1)
+# ACTIVE_BACKENDS —— 槽位 → 该槽位环境服务要挂的后端端口列表
+# ENV_SLOTS       —— 要起几个环境服务
+# AGENT_SLOTS     —— 要起几个智能体服务（每个测一个模型）
 ACTIVE=()
 declare -A ACTIVE_BACKENDS=()
+ENV_SLOTS=()
+AGENT_SLOTS=()
+POOL_BACKEND_COUNT=0
+POOL_ENV_PORT=""
+POOL_PARALLEL=""
 
 # 后端是否真的能用。两类后端共用 /health，但 mobile-world 还要求返回
 # {"ok": true}（驱动会在 connect 时校验这个字段，只回 200 会在启动时炸）。
@@ -376,12 +443,15 @@ backend_healthy() {
 
 preflight_backends() {
   local i j port ports down=()
+  local -a all_ports=()
+
   for ((i = 1; i <= PROCS; i++)); do
     ports=""
     for ((j = 1; j <= BACKENDS_PER_ENV; j++)); do
       port="$(backend_port "$i" "$j")"
       if backend_healthy "$port"; then
         ports+="${ports:+,}${port}"
+        all_ports+=( "$port" )
       else
         down+=( "$port" )
         warn "后端 :$port（进程 $i 的第 $j 个 $BACKEND_KIND）不可用"
@@ -390,16 +460,38 @@ preflight_backends() {
     if [ -n "$ports" ]; then
       ACTIVE+=( "$i" )
       ACTIVE_BACKENDS[$i]="$ports"
-    else
+    elif [ "$POOL" -eq 0 ]; then
       warn "进程 $i 没有可用后端，跳过"
     fi
   done
+
   if [ "${#down[@]}" -gt 0 ] && [ "$ALLOW_DEGRADED" -eq 0 ]; then
     die "以下 $BACKEND_KIND 后端不可用: ${down[*]}
     环境服务启动时会对每个后端做 /health 连接，缺一个就起不来。
     请先恢复这些后端（ssh 隧道 / 容器），或加 --allow-degraded。"
   fi
-  [ "${#ACTIVE[@]}" -gt 0 ] || die "没有任何可用的 $BACKEND_KIND 后端（端口 ${BACKEND_PORT_BASE}..$((BACKEND_PORT_BASE + PROCS * BACKENDS_PER_ENV - 1))）"
+
+  if [ "$POOL" -eq 1 ]; then
+    # 池模式：把所有健康后端挂到唯一的环境服务上，槽位恒为 1
+    local all
+    all="$(IFS=,; printf '%s' "${all_ports[*]}")"
+    [ "${#all_ports[@]}" -gt 0 ] || die "池模式下没有任何可用的 $BACKEND_KIND 后端"
+    ACTIVE=( 1 )
+    ACTIVE_BACKENDS[1]="$all"
+    POOL_BACKEND_COUNT="${#all_ports[@]}"
+    POOL_ENV_PORT="$(env_port 1)"
+  else
+    [ "${#ACTIVE[@]}" -gt 0 ] || die "没有任何可用的 $BACKEND_KIND 后端（端口 ${BACKEND_PORT_BASE}..$((BACKEND_PORT_BASE + PROCS * BACKENDS_PER_ENV - 1))）"
+  fi
+
+  # 槽位分离：池模式一个 env 服务 + PROCS 个 agent；非池模式二者合并
+  if [ "$POOL" -eq 1 ]; then
+    ENV_SLOTS=( 1 )
+    AGENT_SLOTS=( $(seq 1 "$PROCS") )
+  else
+    ENV_SLOTS=( "${ACTIVE[@]}" )
+    AGENT_SLOTS=( "${ACTIVE[@]}" )
+  fi
 }
 
 # ------------------------------ 预检：模型 ----------------------------------
@@ -410,7 +502,8 @@ preflight_models() {
   local -a wanted=()
   [ -n "$MODELS" ] && IFS=',' read -r -a wanted <<< "$MODELS"
 
-  for i in "${ACTIVE[@]}"; do
+  # 模型是按「被测 agent」绑定的，池模式下与 env 槽位无关
+  for i in "${AGENT_SLOTS[@]}"; do
     port="$(model_port "$i")"
     url="http://$HOST:$port/v1"
 
@@ -434,6 +527,15 @@ preflight_models() {
     PROCESS_MODEL[$i]="$model"
     info "进程 $i 模型: ${model}  ($url)"
   done
+
+  # 池模式并发：公平份额 + 余量，让早跑完的进程能吸收别人放出的后端
+  if [ "$POOL" -eq 1 ]; then
+    local n_proc="${#AGENT_SLOTS[@]}"
+    [ "$n_proc" -ge 1 ] || n_proc=1
+    # ceil(total/n) + 2
+    POOL_PARALLEL=$(( (POOL_BACKEND_COUNT + n_proc - 1) / n_proc + 2 ))
+    info "池模式: ${POOL_BACKEND_COUNT} 个后端共享，每个进程默认并发 ${POOL_PARALLEL}"
+  fi
 }
 
 # ------------------------------- 目录准备 -----------------------------------
@@ -441,6 +543,12 @@ prepare_run_dir() {
   [ -n "$RUN_DIR" ] || RUN_DIR="$RUNS_ROOT/launch_$(date '+%Y%m%d_%H%M%S')"
   mkdir -p "$RUN_DIR"/{logs,pids,configs,results,evidence} \
     || die "无法创建运行目录: $RUN_DIR"
+  # 复用 --run-dir 时，旧的 procs.tsv 仍是「端口被谁占着」的唯一线索：
+  # 启动中途 die 的进程不会留下任何记录。先备份再去清空，端口冲突时
+  # run_dir_of_pid 才能反查到它，给出可执行的 stop/kill 建议。
+  if [ -s "$RUN_DIR/procs.tsv" ]; then
+    cp -f "$RUN_DIR/procs.tsv" "$RUN_DIR/procs.tsv.prev" 2>/dev/null || true
+  fi
   : > "$RUN_DIR/procs.tsv"
   : > "$RUN_DIR/models.tsv"
 }
@@ -448,13 +556,37 @@ prepare_run_dir() {
 # 只在服务真正就绪（或用户显式指定 --run-dir）后，才把 latest_launch 指过来，
 # 免得一次预检失败的 start 把指针推到一个空目录上。
 publish_run_dir() {
-  ln -sfn "$RUN_DIR" "$RUNS_ROOT/latest_launch" 2>/dev/null || true
+  # 指向共享区之外（比如本机 /tmp）的路径不要发布：别的机器根本访问不到，
+  # 会污染共享指针并给出误导性的 stop 建议。
+  local abs; abs="$(readlink -f -- "$RUN_DIR" 2>/dev/null || printf '%s' "$RUN_DIR")"
+  case "$abs" in
+    "$RUNS_ROOT"/*)
+      ln -sfn "$abs" "$RUNS_ROOT/latest_launch.$(hostname)" 2>/dev/null || true
+      ;;
+    *)
+      warn "运行目录不在 $RUNS_ROOT 下（$abs），不更新 latest_launch 指针"
+      ;;
+  esac
+}
+
+# 端口被占时给用户的处置建议：先按 PID 反查所属 run 目录，查不到就只给 kill。
+port_conflict_hint() {
+  local pid="$1" d
+  printf '    最常见的原因：上一轮测评跑完后 env/agent 服务会保留（方便重跑 eval）。\n'
+  if [ -n "$pid" ]; then
+    if d="$(run_dir_of_pid "$pid" 2>/dev/null)" && [ -n "$d" ]; then
+      printf '    停止它:  ./eval.sh stop --run-dir %s\n' "$d"
+    else
+      printf '    停止它:  kill %s    #（记录里找不到这个 PID，直接按 PID 停）\n' "$pid"
+    fi
+  fi
+  printf '    或换一套端口: --env-port-base 9101 --agent-port-base 9401'
 }
 
 # ------------------------------- 阶段 1 -------------------------------------
 start_env_services() {
   local i port log specs j pid failed=0
-  for i in "${ACTIVE[@]}"; do
+  for i in "${ENV_SLOTS[@]}"; do
     port="$(env_port "$i")"
     log="$(logfile_of env "$i")"
     specs=""
@@ -462,11 +594,11 @@ start_env_services() {
       specs+="${specs:+,}${_kind_prefix}${j}=${BACKEND_KIND}@http://${HOST}:${j}"
     done
     if [ "$DRY_RUN" -eq 0 ] && port_in_use "$port"; then
-      local holder; holder="$(port_owner "$port")"
+      local holder hint
+      holder="$(port_owner "$port")"
+      hint="$(port_conflict_hint "$holder")"
       die "环境服务端口 $port 已被占用（进程 $i）${holder:+，占用者 pid=$holder $(ps -o args= -p "$holder" 2>/dev/null | cut -c1-90)}
-    最常见的原因：上一轮测评跑完后 env/agent 服务会保留（方便重跑 eval）。
-    停止上一轮:  ./eval.sh stop --run-dir $(readlink -f "$RUNS_ROOT/latest_launch" 2>/dev/null)
-    或换一套端口: --env-port-base 9101 --agent-port-base 9401"
+$hint"
     fi
     pid="$(spawn "$log" "$(pidfile_of env "$i")" \
       "$MOBILERUN_BIN" serve env --host "$HOST" --port "$port" --backends "$specs")"
@@ -474,7 +606,7 @@ start_env_services() {
   done
   [ "$DRY_RUN" -eq 1 ] && return 0
 
-  for i in "${ACTIVE[@]}"; do
+  for i in "${ENV_SLOTS[@]}"; do
     wait_http "环境服务 $i" "http://$HOST:$(env_port "$i")/v1/health" \
       "$(cat "$(pidfile_of env "$i")")" "$HEALTH_TIMEOUT" "$(logfile_of env "$i")" \
       || failed=$((failed + 1))
@@ -498,7 +630,7 @@ start_agent_services() {
   local i port log cfg cap pid failed=0
   export OPENAI_API_KEY="${OPENAI_API_KEY:-EMPTY}"
 
-  for i in "${ACTIVE[@]}"; do
+  for i in "${AGENT_SLOTS[@]}"; do
     port="$(agent_port "$i")"
     log="$(logfile_of agent "$i")"
     cfg="$RUN_DIR/configs/p${i}.json"
@@ -506,15 +638,22 @@ start_agent_services() {
     # 记下「进程 → 被测模型」，汇总时用它给结果文件贴标签
     printf '%s\t%s\n' "$i" "${PROCESS_MODEL[$i]}" >> "$RUN_DIR/models.tsv"
 
-    cap="${PARALLEL:-$(env_capacity "$(env_port "$i")")}"
+    if [ -n "$PARALLEL" ]; then
+      cap="$PARALLEL"
+    elif [ "$POOL" -eq 1 ]; then
+      # 池模式：和 eval 的默认并发保持一致，别让 agent 侧无限堆积 episode
+      cap="$POOL_PARALLEL"
+    else
+      cap="$(env_capacity "$(env_port "$i")")"
+    fi
     [ "$cap" -ge 1 ] 2>/dev/null || cap="$BACKENDS_PER_ENV"
 
     if [ "$DRY_RUN" -eq 0 ] && port_in_use "$port"; then
-      local holder; holder="$(port_owner "$port")"
+      local holder hint
+      holder="$(port_owner "$port")"
+      hint="$(port_conflict_hint "$holder")"
       die "智能体服务端口 $port 已被占用（进程 $i）${holder:+，占用者 pid=$holder $(ps -o args= -p "$holder" 2>/dev/null | cut -c1-90)}
-    最常见的原因：上一轮测评跑完后 env/agent 服务会保留（方便重跑 eval）。
-    停止上一轮:  ./eval.sh stop --run-dir $(readlink -f "$RUNS_ROOT/latest_launch" 2>/dev/null)
-    或换一套端口: --env-port-base 9101 --agent-port-base 9401"
+$hint"
     fi
     pid="$(spawn "$log" "$(pidfile_of agent "$i")" \
       "$AGENT_HARNESS_BIN" serve \
@@ -527,12 +666,42 @@ start_agent_services() {
   done
   [ "$DRY_RUN" -eq 1 ] && return 0
 
-  for i in "${ACTIVE[@]}"; do
+  for i in "${AGENT_SLOTS[@]}"; do
     wait_http "智能体服务 $i" "http://$HOST:$(agent_port "$i")/v1/health" \
       "$(cat "$(pidfile_of agent "$i")")" "$HEALTH_TIMEOUT" "$(logfile_of agent "$i")" \
       || failed=$((failed + 1))
   done
   [ "$failed" -eq 0 ] || die "$failed 个智能体服务未就绪（日志: $RUN_DIR/logs）"
+}
+
+# 池模式：对共享 env 服务上的每个后端各应用一次套件种子/实例数。
+# 之后各 runner 不再传 --seed，避免它们并发无锁地互相重置套件。
+apply_pool_seed() {
+  local sidx="$1" eport id
+  eport="$(eval_env_port "$sidx")"
+  local -a ids=()
+  while read -r id; do
+    [ -n "$id" ] && ids+=( "$id" )
+  done < <(curl -fsS -m 10 "http://$HOST:$eport/v1/health" 2>/dev/null \
+            | jq -r '.backends[]?.id' 2>/dev/null)
+  [ "${#ids[@]}" -gt 0 ] || { warn "池模式：读不到后端列表，跳过统一套件初始化"; return 0; }
+
+  if [ "$DRY_RUN" -eq 1 ]; then
+    info "池模式：将对 ${#ids[@]} 个后端统一应用 seed=${SEED:-–} n_task_combinations=${NCOMB:-–}"
+    return 0
+  fi
+
+  local q="" t
+  [ -n "$SEED" ] && q="seed=$SEED"
+  [ -n "$NCOMB" ] && q="${q:+$q&}n_task_combinations=$NCOMB"
+  info "池模式：统一应用套件设置到 ${#ids[@]} 个后端（${q}）"
+  for id in "${ids[@]}"; do
+    if ! curl -fsS -m 1800 -X POST \
+        "http://$HOST:$eport/v1/backends/$id/reinitialize?$q" \
+        -o /dev/null 2>/dev/null; then
+      warn "后端 $id 套件初始化失败（继续，该后端可能使用旧实例集）"
+    fi
+  done
 }
 
 # ------------------------------- 阶段 3 -------------------------------------
@@ -546,18 +715,19 @@ cmd_eval() {
   if [ "${#ACTIVE[@]}" -eq 0 ] && { [ "$PROCS" -ne 4 ] || [ "$BACKENDS_PER_ENV" -ne 4 ]; }; then
     info "eval 复用 start 起好的服务，进程列表取自 $RUN_DIR/procs.tsv（--processes/--backends-per-env 在此不起作用）"
   fi
+  # 分片列表以【agent】为准：池模式下 env 只有 1 个，但模型有 PROCS 个
   local -a shards=()
   local i port aport
-  for i in $(recorded_indices env); do
-    port="$(lookup_port env "$i" 2>/dev/null)" || continue
+  for i in $(recorded_indices agent); do
     aport="$(lookup_port agent "$i" 2>/dev/null)" || continue
-    http_ok "http://$HOST:$port/v1/health" 5  || { warn "环境服务 $i (:$port) 不健康，跳过该模型"; continue; }
+    port="$(eval_env_port "$i")"
+    http_ok "http://$HOST:$port/v1/health" 5  || { warn "环境服务 (:$port) 不健康，跳过该模型"; continue; }
     http_ok "http://$HOST:$aport/v1/health" 5 || { warn "智能体服务 $i (:$aport) 不健康，跳过该模型"; continue; }
     shards+=( "$i" )
   done
   if [ "${#shards[@]}" -eq 0 ]; then
     if [ "$DRY_RUN" -eq 1 ] && [ "${#ACTIVE[@]}" -gt 0 ]; then
-      shards=( "${ACTIVE[@]}" )     # dry-run：还没真起服务，用计划中的进程
+      shards=( "${AGENT_SLOTS[@]}" )   # dry-run：还没真起服务，用计划中的 agent 槽位
     else
       die "没有可用的 env/agent 服务对；先 ./eval.sh start"
     fi
@@ -590,6 +760,12 @@ cmd_eval() {
     info "任务区间: $TASK_INDEX_RANGE；${#shards[@]} 个进程各跑这一整段"
   fi
 
+  # 池模式下套件种子必须由这里统一应用一次：多个 runner 各自 reinitialize
+  # 是无锁且互相破坏的（见 runner.py:526-544 与 app.py:123-131）。
+  if [ "$POOL" -eq 1 ] && [ -n "$SEED$NCOMB" ] && [ "$BACKEND_KIND" = "android-world" ]; then
+    apply_pool_seed "${shards[0]}"
+  fi
+
   local idx out parallel log pid eport aport model safe_model
   local -a launched=()
   for idx in "${shards[@]}"; do
@@ -604,10 +780,14 @@ cmd_eval() {
       esac
     fi
 
-    eport="$(shard_env_port "$idx")"
+    eport="$(eval_env_port "$idx")"
     aport="$(shard_agent_port "$idx")"
     if [ -n "$PARALLEL" ]; then
       parallel="$PARALLEL"
+    elif [ "$POOL" -eq 1 ]; then
+      # 池模式：公平份额 + 余量，所有人共享同一个后端池
+      parallel="$POOL_PARALLEL"
+      [ "$parallel" -ge 1 ] 2>/dev/null || parallel="$BACKENDS_PER_ENV"
     else
       parallel="$(env_capacity "$eport")"
       [ "$parallel" -ge 1 ] 2>/dev/null || parallel="$BACKENDS_PER_ENV"
@@ -625,12 +805,15 @@ cmd_eval() {
     [ "$RESUME" -eq 1 ]     && cmd+=( --resume )
     [ "$EVIDENCE" -eq 0 ]   && cmd+=( --no-evidence )
     [ "$DEBUG" -eq 1 ]      && cmd+=( --debug )
-    # 套件种子/实例数只对 AndroidWorld 有意义；mobile-world 的套件由服务端固定
-    if [ "$BACKEND_KIND" = "android-world" ]; then
+    # 套件种子/实例数只对 AndroidWorld 有意义；mobile-world 的套件由服务端固定。
+    # 池模式下套件已由 eval.sh 统一应用过一次，这里绝不能再传给 runner：
+    # 每个 runner 都会遍历所有后端做 reinitialize，并发无锁会把别人正在跑的
+    # episode 的实例集重置掉。
+    if [ "$BACKEND_KIND" != "android-world" ]; then
+      [ -n "$SEED$NCOMB" ] && warn "$BACKEND_KIND 不支持 --seed / --n-task-combinations，已忽略"
+    elif [ "$POOL" -eq 0 ]; then
       [ -n "$SEED" ]  && cmd+=( --seed "$SEED" )
       [ -n "$NCOMB" ] && cmd+=( --n-task-combinations "$NCOMB" )
-    elif [ -n "$SEED$NCOMB" ]; then
-      warn "$BACKEND_KIND 不支持 --seed / --n-task-combinations，已忽略"
     fi
 
     info "测评 $idx：模型 ${model:-?}，并发 $parallel，结果 $out"
@@ -774,40 +957,87 @@ cmd_logs() {
 }
 
 # --------------------------------- 停止 -------------------------------------
+# 收集本机仍在监听该端口的、属于本次 eval 的进程 PID。
+# 用于兜住「启动中途 die，PID 没来得及写进 procs.tsv」的遗留服务 —— 那种
+# 进程还在占端口，但记录里查不到，旧版 stop 会静默报告「已停止」。
+orphan_pids_on_ports() {
+  local port pid args f
+  # 当前记录 + 启动前备份的记录都要看：一次 start 会在清空 procs.tsv 之后
+  # 才因端口冲突退出，被占端口只存在于 .prev 里。
+  for f in "$RUN_DIR/procs.tsv" "$RUN_DIR/procs.tsv.prev"; do
+    [ -f "$f" ] || continue
+    while IFS=$'\t' read -r role idx port pid log; do
+      [ -z "${port:-}" ] && continue
+      [ "$port" = "0" ] && continue
+      pid="$(port_owner "$port")"
+      [ -n "$pid" ] || continue
+      # 只认我们自己拉起的服务，别误杀同端口上的其他程序
+      args="$(ps -o args= -p "$pid" 2>/dev/null)"
+      case "$args" in
+        *mobilerun*serve\ env*|*agent-harness*serve*) printf '%s\n' "$pid" ;;
+      esac
+    done < "$f"
+  done | sort -u
+}
+
 cmd_stop() {
   [ -n "$RUN_DIR" ] || RUN_DIR="$(latest_run_dir)" || { info "没有可停止的运行记录"; return 0; }
   [ -f "$RUN_DIR/procs.tsv" ] || { info "没有进程记录: $RUN_DIR/procs.tsv"; return 0; }
 
   local pass role idx port pid log
+  local -a targets=()
+
   for pass in eval agent env; do
-    while IFS=$'\t' read -r role idx port pid log; do
-      [ "$role" = "$pass" ] || continue
-      if pid_alive "$pid"; then
-        info "停止 $role $idx (pid $pid)"
-        kill_tree TERM "$pid"
-      fi
-    done < "$RUN_DIR/procs.tsv"
+    local f
+    for f in "$RUN_DIR/procs.tsv" "$RUN_DIR/procs.tsv.prev"; do
+      [ -f "$f" ] || continue
+      while IFS=$'\t' read -r role idx port pid log; do
+        [ "$role" = "$pass" ] || continue
+        if pid_alive "$pid"; then
+          info "停止 $role $idx (pid $pid)"
+          kill_tree TERM "$pid"
+          targets+=( "$pid" )
+        fi
+      done < "$f"
+    done
   done
+
+  # 记录里没有、但确实占着本服务端口的遗留进程（跳过已在上一步停止的）
+  local orphan seen
+  while read -r orphan; do
+    [ -n "$orphan" ] || continue
+    seen=0
+    for pid in "${targets[@]}"; do
+      [ "$pid" = "$orphan" ] && { seen=1; break; }
+    done
+    [ "$seen" -eq 1 ] && continue
+    warn "停止未记录的遗留服务 (pid $orphan，占着记录中的端口)"
+    kill_tree TERM "$orphan"
+    targets+=( "$orphan" )
+  done < <(orphan_pids_on_ports)
+
+  if [ "${#targets[@]}" -eq 0 ]; then
+    info "没有需要停止的进程（记录中的 PID 均不存活，端口也没有本次启动的遗留服务）"
+    return 0
+  fi
 
   local deadline=$((SECONDS + 30)) alive
   while [ "$SECONDS" -lt "$deadline" ]; do
     alive=0
-    while IFS=$'\t' read -r role idx port pid log; do
-      [ -z "${role:-}" ] && continue
+    for pid in "${targets[@]}"; do
       pid_alive "$pid" && alive=$((alive + 1))
-    done < "$RUN_DIR/procs.tsv"
+    done
     [ "$alive" -eq 0 ] && break
     sleep 1
   done
-  while IFS=$'\t' read -r role idx port pid log; do
-    [ -z "${role:-}" ] && continue
+  for pid in "${targets[@]}"; do
     if pid_alive "$pid"; then
-      warn "$role $idx 未在 30s 内退出，强制结束"
+      warn "pid $pid 未在 30s 内退出，强制结束"
       kill_tree KILL "$pid"
     fi
-  done < "$RUN_DIR/procs.tsv"
+  done
 
-  info "已停止（记录保留在 $RUN_DIR/procs.tsv）"
+  info "已停止 ${#targets[@]} 个进程（记录保留在 $RUN_DIR/procs.tsv）"
 }
 
 # --------------------------------- 启动 -------------------------------------
@@ -821,14 +1051,18 @@ start_all() {
   start_env_services
   start_agent_services
   publish_run_dir
-  info "环境服务 + 智能体服务就绪（${#ACTIVE[@]} 个进程）"
+  if [ "$POOL" -eq 1 ]; then
+    info "就绪：1 个环境服务（:$(env_port 1)，${POOL_BACKEND_COUNT} 个后端，所有进程共享）+ ${#AGENT_SLOTS[@]} 个智能体服务"
+  else
+    info "环境服务 + 智能体服务就绪（${#ACTIVE[@]} 个进程）"
+  fi
 }
 
 # -------------------------------- 分发 -------------------------------------
 case "$CMD" in
   run)
     start_all
-    info "开始测评 —— ${#ACTIVE[@]} 个模型并行，每个进程各跑完整任务集"
+    info "开始测评 —— ${#AGENT_SLOTS[@]} 个模型并行，每个进程各跑完整任务集"
     cmd_eval
     # 服务留着方便重跑（./eval.sh eval）；下次 start 会先要求 stop 或换端口
     ;;
