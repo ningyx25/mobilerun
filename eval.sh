@@ -47,7 +47,9 @@
 #     --no-resume               不跳过已记录的任务
 #     --rerun-fail              重跑各模型上一轮失败的题（error 为空且 score==0）
 #                               源文件自动取 <run-dir>/results/<模型>.json
-#                               结果写到 <模型>_rerun.json，原文件不动；隐含不传 --resume
+#                               结果写到 <模型>_rerun.json，原文件不动
+#                               默认带 --resume：中断后再跑一次即续跑未完成的题；
+#                               要强制全量重跑用 --no-resume
 #     --rerun-fail-dir DIR      指定失败源所在的 results 目录（默认当前 run-dir）
 #     --no-evidence             不写证据包
 #     --no-debug                不打印 agent 实时事件
@@ -828,11 +830,11 @@ cmd_eval() {
       --evidence-dir "$evdir"
       --output "$out" )
     [ -n "$TASK_INDEX_RANGE" ] && cmd+=( --task-index-range "$TASK_INDEX_RANGE" )
-    if [ "$RERUN_FAIL" -eq 1 ]; then
-      cmd+=( --rerun-fail "$src" )
-    else
-      [ "$RESUME" -eq 1 ] && cmd+=( --resume )
-    fi
+    [ "$RERUN_FAIL" -eq 1 ] && cmd+=( --rerun-fail "$src" )
+    # 重跑也需要 --resume：中断后再跑一次就能从 <model>_rerun.json 接着来。
+    # runner 只在 --resume 与 --rerun-fail 指向同一个文件时才拒绝
+    # （runner.py:407），这里输出是 _rerun.json、源是基线文件，永不重合。
+    [ "$RESUME" -eq 1 ] && cmd+=( --resume )
     [ "$EVIDENCE" -eq 0 ]   && cmd+=( --no-evidence )
     [ "$DEBUG" -eq 1 ]      && cmd+=( --debug )
     # 套件种子/实例数只对 AndroidWorld 有意义；mobile-world 的套件由服务端固定。
