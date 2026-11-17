@@ -56,6 +56,7 @@ console = Console()
 
 _BENCHMARK_NAME = "harness"
 _CAPACITY_RETRY_S = 5.0
+_RETRY_BACKOFF_S = 2.0
 
 
 # ---------------------------------------------------------------------------
@@ -364,6 +365,7 @@ async def run_harness_suite(
     rerun_fail: Optional[str] = None,
     health_timeout: float = 900.0,
     task_timeout: float = 1000.0,
+    max_retry: int = 10,
     capture_evidence: bool = True,
     evidence_dir: Optional[str] = None,
     provider: Optional[str] = None,
@@ -382,6 +384,9 @@ async def run_harness_suite(
     env_url = env_url.rstrip("/")
     agent_url = agent_url.rstrip("/")
     _setup_benchmark_logging(bool(debug or False), verbose)
+    # The CLI rejects negatives; clamp here so direct API callers degrade to
+    # "no retries" instead of looping forever.
+    max_retry = max(0, int(max_retry))
 
     if output is None:
         output = (
@@ -447,6 +452,7 @@ async def run_harness_suite(
             len(failed_keys) if failed_keys is not None else None
         ),
         "parallel": parallel,
+        "max_retry": max_retry,
         "capture_evidence": capture_evidence,
         "results_path": str(output_path),
         "evidence_root": str(evidence_root) if capture_evidence else None,
@@ -617,7 +623,8 @@ async def run_harness_suite(
 
         console.print(
             f"🏁 Running {len(pending)} task(s) "
-            f"(env={env_url}, agent={agent_url}, parallel={parallel})"
+            f"(env={env_url}, agent={agent_url}, parallel={parallel}, "
+            f"max_retry={max_retry})"
         )
 
         write_lock = asyncio.Lock()
@@ -632,10 +639,13 @@ async def run_harness_suite(
                     # The run was aborted while this task was queued; leave it
                     # unrecorded so --resume picks it up.
                     return
-                result, infra_failure = await _run_with_capacity_retry(
+                result = await _run_with_retries(
                     task,
                     env=env,
                     agent=agent,
+                    max_retry=max_retry,
+                    abort=abort,
+                    health_timeout=health_timeout,
                     agent_env_url=agent_env_url_override,
                     overrides=overrides,
                     steps=steps,
@@ -649,19 +659,6 @@ async def run_harness_suite(
                     verbose=verbose,
                     debug=bool(debug),
                 )
-            if infra_failure and not abort.is_set():
-                if not await _services_up(env, agent):
-                    # Same policy as runbench: probe, wait for recovery, and
-                    # abort the run if the services never come back.
-                    console.print(
-                        "[yellow]Connection failure; waiting for the server "
-                        "to recover ...[/]"
-                    )
-                    if not await _wait_healthy(env, agent, health_timeout):
-                        console.print(
-                            "[red]Server did not recover; aborting the run.[/]"
-                        )
-                        abort.set()
             key = result.key
             _write_episode_manifest(result, run_meta)
             results[key] = result
@@ -694,6 +691,98 @@ async def run_harness_suite(
         await agent.close()
 
 
+def _is_capacity_error(result: TaskResult) -> bool:
+    """Whether the row failed because the environment had no free backend."""
+    return result.error is not None and "capacity" in result.error.lower()
+
+
+async def _recover_services(
+    env: EnvClient,
+    agent: AgentClient,
+    *,
+    health_timeout: float,
+    abort: asyncio.Event,
+) -> bool:
+    """Probe the services after an infra failure; wait for recovery or abort."""
+    if abort.is_set():
+        return False
+    if await _services_up(env, agent):
+        return True
+    # Same policy as runbench: probe, wait for recovery, and abort the run if
+    # the services never come back.
+    console.print(
+        "[yellow]Connection failure; waiting for the server to recover ...[/]"
+    )
+    if not await _wait_healthy(env, agent, health_timeout):
+        console.print("[red]Server did not recover; aborting the run.[/]")
+        abort.set()
+        return False
+    return True
+
+
+async def _run_with_retries(
+    task: TaskSpec,
+    *,
+    env: EnvClient,
+    agent: AgentClient,
+    max_retry: int,
+    abort: asyncio.Event,
+    health_timeout: float,
+    **kwargs: Any,
+) -> TaskResult:
+    """Run one task end to end, retrying error rows in-process.
+
+    Each retry is a fresh session/episode. Capacity-exhausted rows are not
+    retried again: ``_run_with_capacity_retry`` already polled for a free
+    backend for a whole task budget.
+    """
+    attempt = 0
+    result: Optional[TaskResult] = None
+    while True:
+        if attempt > 0 and abort.is_set():
+            # Another worker aborted the run; keep the last row for recording.
+            assert result is not None
+            return result
+        attempt += 1
+        result, infra_failure = await _run_with_capacity_retry(
+            task, env=env, agent=agent, **kwargs
+        )
+        result.attempts = attempt
+
+        # Preserve the existing infra policy: probe, wait for recovery, and
+        # abort the run if the services never return. This runs on every
+        # attempt, including the last one.
+        if infra_failure and not await _recover_services(
+            env, agent, health_timeout=health_timeout, abort=abort
+        ):
+            return result
+
+        if result.error is None:
+            return result
+        if _is_capacity_error(result):
+            # Already retried for a whole task_timeout; retrying again would
+            # multiply the wait for a suite-level resource problem.
+            console.print(
+                f"[yellow]⚠ {task.id} — capacity budget exhausted; "
+                "not retrying further[/]"
+            )
+            return result
+        if attempt > max_retry or abort.is_set():
+            if attempt > max_retry:
+                console.print(
+                    f"[red]✖ {task.id} — still failing after {attempt} "
+                    "attempt(s); giving up[/]"
+                )
+            return result
+
+        console.print(
+            f"[yellow]↻ {task.id} — attempt {attempt}/{max_retry + 1} failed: "
+            f"{escape(result.error[:160])}; retrying in {_RETRY_BACKOFF_S:.1f}s[/]"
+        )
+        if _RETRY_BACKOFF_S > 0:
+            await asyncio.sleep(_RETRY_BACKOFF_S)
+
+
 async def _run_with_capacity_retry(
     task: TaskSpec, *, env: EnvClient, **kwargs: Any
 ) -> tuple[TaskResult, bool]:
@@ -701,7 +790,7 @@ async def _run_with_capacity_retry(
     deadline = time.monotonic() + float(kwargs.get("task_timeout", 1000.0))
     while True:
         result, infra = await _run_one(task, env=env, **kwargs)
-        if result.error is None or "capacity" not in result.error.lower():
+        if result.error is None or not _is_capacity_error(result):
             return result, infra
         if time.monotonic() >= deadline:
             # Nobody freed a backend in the whole task budget: treat it as an
@@ -810,6 +899,7 @@ def _write_episode_manifest(result: TaskResult, run_meta: Dict[str, Any]) -> Non
         "eval_reason": result.eval_reason,
         "duration_s": result.duration_s,
         "error": result.error,
+        "attempts": result.attempts,
         "timestamp": result.timestamp,
         "run_id": run_meta.get("run_id"),
         "server_url": result.server_url,
@@ -942,15 +1032,16 @@ def _render_episode_event(label: str, event: Dict[str, Any]) -> None:
 
 def _print_result_line(index: int, total: int, result: TaskResult) -> None:
     status = "green" if (result.gated_score or 0.0) > 0.5 else "red"
+    retried = f" attempts={result.attempts}" if result.attempts > 1 else ""
     if result.error is not None:
         console.print(
             f"[red][{index}/{total}] {result.task_type} ({result.difficulty}) "
-            f"ERROR: {result.error[:160]} ({result.duration_s:.1f}s)[/]"
+            f"ERROR: {result.error[:160]} ({result.duration_s:.1f}s){retried}[/]"
         )
         return
     console.print(
         f"[{status}][{index}/{total}] {result.task_type} ({result.difficulty}) "
         f"score={result.score:.2f} gated={result.gated_score:.2f} "
         f"steps={result.steps} finished={result.finished} "
-        f"({result.duration_s:.1f}s)[/]"
+        f"({result.duration_s:.1f}s){retried}[/]"
     )

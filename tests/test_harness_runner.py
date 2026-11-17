@@ -7,7 +7,9 @@ import httpx
 import pytest
 
 import mobilerun.harness.agent_service.episode as episode_module
+import mobilerun.harness.client as client_module
 import mobilerun.harness.runner as runner_module
+from mobilerun.benchmark.android_world import TaskResult
 from mobilerun.config_manager.config_manager import MobileConfig
 from mobilerun.harness.agent_service.app import create_agent_app
 from mobilerun.harness.client import AgentClient, EnvClient
@@ -714,3 +716,370 @@ def test_run_aborts_when_services_do_not_recover(tmp_path, monkeypatch):
     # The failing task is recorded; the queued ones stay unrecorded for --resume.
     assert [row["task_type"] for row in payload["tasks"]] == ["Alpha"]
     assert "ConnectionError" in payload["tasks"][0]["error"]
+
+
+# ---------------------------------------------------------------------------
+# --max-retry: in-process retries for rows that end with an error
+# ---------------------------------------------------------------------------
+
+
+def _retry_task(name: str = "Alpha") -> TaskSpec:
+    return TaskSpec(id=f"{name}#0", backend="fake")
+
+
+def _retry_row(
+    name: str = "Alpha", *, error: str | None = None, score: float | None = 1.0
+) -> TaskResult:
+    return TaskResult(task_type=name, task_idx=0, score=score, error=error)
+
+
+def test_run_with_retries_recovers_from_transient_errors(monkeypatch):
+    monkeypatch.setattr(runner_module, "_RETRY_BACKOFF_S", 0.0)
+    responses = [
+        (_retry_row(error="boom", score=None), False),
+        (_retry_row(error="boom", score=None), False),
+        (_retry_row(), False),
+    ]
+    calls = []
+
+    async def fake_run(task, *, env, **kwargs):
+        calls.append(task.id)
+        return responses[len(calls) - 1]
+
+    monkeypatch.setattr(runner_module, "_run_with_capacity_retry", fake_run)
+
+    result = asyncio.run(
+        runner_module._run_with_retries(
+            _retry_task(),
+            env=object(),
+            agent=object(),
+            max_retry=3,
+            abort=asyncio.Event(),
+            health_timeout=0.0,
+        )
+    )
+
+    assert calls == ["Alpha#0"] * 3
+    assert result.error is None
+    assert result.attempts == 3
+
+
+def test_run_with_retries_stops_after_max_retry(monkeypatch):
+    monkeypatch.setattr(runner_module, "_RETRY_BACKOFF_S", 0.0)
+    calls = []
+
+    async def fake_run(task, *, env, **kwargs):
+        calls.append(task.id)
+        return _retry_row(error="always boom", score=None), False
+
+    monkeypatch.setattr(runner_module, "_run_with_capacity_retry", fake_run)
+
+    result = asyncio.run(
+        runner_module._run_with_retries(
+            _retry_task(),
+            env=object(),
+            agent=object(),
+            max_retry=2,
+            abort=asyncio.Event(),
+            health_timeout=0.0,
+        )
+    )
+
+    assert calls == ["Alpha#0"] * 3
+    assert result.error == "always boom"
+    assert result.attempts == 3
+
+
+def test_max_retry_zero_disables_retries(monkeypatch):
+    monkeypatch.setattr(runner_module, "_RETRY_BACKOFF_S", 0.0)
+    calls = []
+
+    async def fake_run(task, *, env, **kwargs):
+        calls.append(task.id)
+        return _retry_row(error="always boom", score=None), False
+
+    monkeypatch.setattr(runner_module, "_run_with_capacity_retry", fake_run)
+
+    result = asyncio.run(
+        runner_module._run_with_retries(
+            _retry_task(),
+            env=object(),
+            agent=object(),
+            max_retry=0,
+            abort=asyncio.Event(),
+            health_timeout=0.0,
+        )
+    )
+
+    assert calls == ["Alpha#0"]
+    assert result.attempts == 1
+
+
+def test_capacity_exhaustion_is_not_retried_again(monkeypatch):
+    monkeypatch.setattr(runner_module, "_RETRY_BACKOFF_S", 0.0)
+    calls = []
+
+    async def fake_run(task, *, env, **kwargs):
+        calls.append(task.id)
+        return _retry_row(error="429 capacity: no free backend", score=None), True
+
+    async def fake_services_up(env, agent):
+        return True
+
+    monkeypatch.setattr(runner_module, "_run_with_capacity_retry", fake_run)
+    monkeypatch.setattr(runner_module, "_services_up", fake_services_up)
+
+    result = asyncio.run(
+        runner_module._run_with_retries(
+            _retry_task(),
+            env=object(),
+            agent=object(),
+            max_retry=10,
+            abort=asyncio.Event(),
+            health_timeout=0.0,
+        )
+    )
+
+    # `_run_with_capacity_retry` already spent a whole task budget polling.
+    assert calls == ["Alpha#0"]
+    assert result.attempts == 1
+    assert "capacity" in result.error
+
+
+def test_retry_waits_for_services_recovery_first(monkeypatch):
+    monkeypatch.setattr(runner_module, "_RETRY_BACKOFF_S", 0.0)
+    responses = [
+        (_retry_row(error="ConnectionError: down", score=None), True),
+        (_retry_row(), False),
+    ]
+    calls = []
+
+    async def fake_run(task, *, env, **kwargs):
+        calls.append(task.id)
+        return responses[len(calls) - 1]
+
+    async def fake_services_up(env, agent):
+        return False
+
+    async def fake_wait_healthy(env, agent, timeout):
+        return True
+
+    monkeypatch.setattr(runner_module, "_run_with_capacity_retry", fake_run)
+    monkeypatch.setattr(runner_module, "_services_up", fake_services_up)
+    monkeypatch.setattr(runner_module, "_wait_healthy", fake_wait_healthy)
+
+    result = asyncio.run(
+        runner_module._run_with_retries(
+            _retry_task(),
+            env=object(),
+            agent=object(),
+            max_retry=2,
+            abort=asyncio.Event(),
+            health_timeout=5.0,
+        )
+    )
+
+    assert calls == ["Alpha#0", "Alpha#0"]
+    assert result.error is None
+    assert result.attempts == 2
+
+
+def test_retry_aborts_when_services_never_recover(monkeypatch):
+    monkeypatch.setattr(runner_module, "_RETRY_BACKOFF_S", 0.0)
+    calls = []
+
+    async def fake_run(task, *, env, **kwargs):
+        calls.append(task.id)
+        return _retry_row(error="ConnectionError: down", score=None), True
+
+    async def fake_services_up(env, agent):
+        return False
+
+    async def fake_wait_healthy(env, agent, timeout):
+        return False
+
+    monkeypatch.setattr(runner_module, "_run_with_capacity_retry", fake_run)
+    monkeypatch.setattr(runner_module, "_services_up", fake_services_up)
+    monkeypatch.setattr(runner_module, "_wait_healthy", fake_wait_healthy)
+
+    abort = asyncio.Event()
+    result = asyncio.run(
+        runner_module._run_with_retries(
+            _retry_task(),
+            env=object(),
+            agent=object(),
+            max_retry=10,
+            abort=abort,
+            health_timeout=0.0,
+        )
+    )
+
+    assert calls == ["Alpha#0"]
+    assert abort.is_set() is True
+    assert result.error is not None
+
+
+def test_retry_stops_when_another_worker_aborts(monkeypatch):
+    monkeypatch.setattr(runner_module, "_RETRY_BACKOFF_S", 0.0)
+    calls = []
+    abort = asyncio.Event()
+
+    async def fake_run(task, *, env, **kwargs):
+        calls.append(task.id)
+        abort.set()
+        return _retry_row(error="boom", score=None), False
+
+    monkeypatch.setattr(runner_module, "_run_with_capacity_retry", fake_run)
+
+    result = asyncio.run(
+        runner_module._run_with_retries(
+            _retry_task(),
+            env=object(),
+            agent=object(),
+            max_retry=10,
+            abort=abort,
+            health_timeout=0.0,
+        )
+    )
+
+    assert calls == ["Alpha#0"]
+    assert result.error == "boom"
+
+
+def test_transient_scoring_error_is_retried_in_process(tmp_path, monkeypatch):
+    monkeypatch.setattr(runner_module, "_RETRY_BACKOFF_S", 0.0)
+    monkeypatch.setattr(client_module, "DEFAULT_BACKOFF_S", 0.0)
+    failures = {"left": 2}
+
+    def score_fn(backend):
+        if failures["left"]:
+            failures["left"] -= 1
+            raise RuntimeError("transient boom")
+        return 1.0
+
+    async def scenario():
+        backend = ScriptedBackend(tasks=["Alpha"], score_fn=score_fn)
+        output = tmp_path / "results.json"
+        async with _Wiring(backend, monkeypatch):
+            ok = await runner_module.run_harness_suite(
+                "http://env.test",
+                "http://agent.test",
+                output=str(output),
+                max_retry=3,
+                capture_evidence=False,
+                health_timeout=5.0,
+                task_timeout=30.0,
+            )
+            return ok, output, backend
+
+    ok, output, backend = _run(scenario())
+    assert ok is True
+    assert backend.prepared == ["Alpha", "Alpha", "Alpha"]
+
+    payload = json.loads(output.read_text())
+    assert payload["max_retry"] == 3
+    assert payload["runs"][-1]["max_retry"] == 3
+    assert len(payload["tasks"]) == 1
+    row = payload["tasks"][0]
+    assert row["error"] is None
+    assert row["score"] == 1.0
+    assert row["attempts"] == 3
+
+
+@pytest.mark.parametrize(("max_retry", "expected"), [(0, 1), (2, 3)])
+def test_retry_exhaustion_records_one_final_row(
+    tmp_path, monkeypatch, max_retry, expected
+):
+    monkeypatch.setattr(runner_module, "_RETRY_BACKOFF_S", 0.0)
+    monkeypatch.setattr(client_module, "DEFAULT_BACKOFF_S", 0.0)
+
+    def score_fn(backend):
+        raise RuntimeError("always boom")
+
+    async def scenario():
+        backend = ScriptedBackend(tasks=["Alpha"], score_fn=score_fn)
+        output = tmp_path / "results.json"
+        async with _Wiring(backend, monkeypatch):
+            ok = await runner_module.run_harness_suite(
+                "http://env.test",
+                "http://agent.test",
+                output=str(output),
+                max_retry=max_retry,
+                capture_evidence=False,
+                health_timeout=5.0,
+                task_timeout=30.0,
+            )
+            return ok, output, backend
+
+    ok, output, backend = _run(scenario())
+    assert ok is False
+    assert backend.prepared == ["Alpha"] * expected
+
+    payload = json.loads(output.read_text())
+    assert len(payload["tasks"]) == 1
+    row = payload["tasks"][0]
+    assert row["error"] is not None
+    assert row["attempts"] == expected
+
+
+def test_legacy_results_default_to_one_attempt(tmp_path):
+    from mobilerun.benchmark.android_world import _load_results
+
+    path = tmp_path / "legacy.json"
+    path.write_text(
+        json.dumps(
+            {
+                "tasks": [
+                    {
+                        "task_type": "Alpha",
+                        "task_idx": 0,
+                        "score": 1.0,
+                        "error": None,
+                    }
+                ]
+            }
+        )
+    )
+
+    loaded = _load_results(path)
+    assert loaded["Alpha#0"].attempts == 1
+
+
+def _invoke_eval_cli(args, monkeypatch):
+    from unittest.mock import AsyncMock
+
+    from click.testing import CliRunner
+
+    import mobilerun.cli.main as cli_main
+
+    runner = AsyncMock(return_value=True)
+    monkeypatch.setattr(
+        "mobilerun.harness.runner.run_harness_suite", runner, raising=False
+    )
+    result = CliRunner().invoke(
+        cli_main.cli,
+        ["eval", "--env", "http://env.test", "--agent", "http://agent.test", *args],
+    )
+    return result, runner
+
+
+def test_eval_cli_forwards_max_retry_default(monkeypatch):
+    result, runner = _invoke_eval_cli([], monkeypatch)
+
+    assert result.exit_code == 0, result.output
+    assert runner.await_args.kwargs["max_retry"] == 10
+
+
+def test_eval_cli_forwards_max_retry_explicit(monkeypatch):
+    result, runner = _invoke_eval_cli(["--max-retry", "3"], monkeypatch)
+
+    assert result.exit_code == 0, result.output
+    assert runner.await_args.kwargs["max_retry"] == 3
+
+
+@pytest.mark.parametrize("value", ["-1", "abc"])
+def test_eval_cli_rejects_invalid_max_retry(monkeypatch, value):
+    result, runner = _invoke_eval_cli([f"--max-retry={value}"], monkeypatch)
+
+    assert result.exit_code == 2
+    assert runner.await_count == 0

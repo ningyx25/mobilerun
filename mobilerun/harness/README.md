@@ -185,6 +185,25 @@ record `rerun_fail_from`, `rerun_fail_failed_count` and any
 `rerun_fail_unknown` keys (failed tasks absent from this suite) in the run
 metadata.
 
+`--max-retry N` (default `10`, `0` disables) re-runs a task **within the same
+invocation** when its final row carries an `error` — an agent episode error or
+timeout, a service 5xx, a connection failure, or an unexpected exception. A
+`score == 0` row is not an error and is not retried; that remains
+`--rerun-fail`'s job. `--rerun-fail` still selects only `error == null &&
+score == 0` rows from its source file, so `--max-retry` is what covers errors
+produced during the current run (including a rerun that errors again).
+
+Each retry starts a fresh session/episode and gets the full `--task-timeout`, so
+the worst case is about `(max_retry + 1) × task_timeout` per task. Capacity
+exhaustion is exempt: `_run_with_capacity_retry` already polls for a free
+backend for a whole task budget, so those rows are recorded without another
+outer retry. Only the final row is persisted; it records `attempts` (1 = no
+retry, capacity polling not counted), and the run metadata records `max_retry`
+(both at the top level and in each `runs[]` entry). `duration_s`, token usage
+and therefore `summary.total_runtime_s`/`total_tokens` reflect only the final
+attempt. Failed attempts keep their own evidence bundle (the agent service names
+it by `episode_id`), but only the final attempt gets a completed `episode.json`.
+
 A worker is just the FastAPI app from `create_agent_app`; this project ships the
 factory, not a CLI command for it:
 
@@ -262,8 +281,8 @@ number of backends only causes capacity retries. `--seed` and
 Results are written with the benchmark runner's own plumbing (`TaskResult`,
 `_write_results`, resume history), so a harness file is directly comparable to
 a `mobilerun runbench` file. Provenance adds `env_url`, `agent_url`,
-`agent_env_url`, `agent_id`, the dispatcher's `agents` table, and
-`protocol_version`.
+`agent_env_url`, `agent_id`, the dispatcher's `agents` table,
+`protocol_version`, `max_retry`, and a per-row `attempts` count.
 
 ## Agent dispatcher
 

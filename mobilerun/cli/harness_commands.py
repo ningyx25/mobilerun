@@ -233,6 +233,15 @@ def serve_agent(
 @click.option("--resume", is_flag=True, default=False, help="Skip recorded tasks")
 @click.option("--health-timeout", default=900.0, type=float)
 @click.option("--task-timeout", default=1000.0, type=float)
+@click.option(
+    "--max-retry",
+    "max_retry",
+    default=10,
+    type=click.IntRange(min=0),
+    show_default=True,
+    help="Retry a task in-process when its row has an error, up to N times "
+    "(default 10; 0 disables). Each retry is a fresh session/episode.",
+)
 @click.option("--evidence/--no-evidence", default=True)
 @click.option(
     "--evidence-dir",
@@ -276,6 +285,7 @@ async def eval_command(
     resume: bool,
     health_timeout: float,
     task_timeout: float,
+    max_retry: int,
     evidence: bool,
     evidence_dir: str | None,
     provider: str | None,
@@ -309,6 +319,7 @@ async def eval_command(
         rerun_fail=rerun_fail,
         health_timeout=health_timeout,
         task_timeout=task_timeout,
+        max_retry=max_retry,
         capture_evidence=evidence,
         evidence_dir=evidence_dir,
         provider=provider,

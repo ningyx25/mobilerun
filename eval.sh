@@ -41,6 +41,8 @@
 #     --output PATH             结果文件底名（自动加 _<模型名> 后缀，一模型一个文件）
 #     --parallel N              每个测评进程的并发（默认 = 该环境服务的后端数）
 #     --task-timeout SEC        单任务超时（默认 3600）
+#     --max-retry N             单任务出现 error 时的同进程重试次数（默认 10，0 关闭）
+#                               每次重试重新执行整个任务并获得完整的 --task-timeout
 #     --task-index-range A-B    只跑任务列表的 A-B 段；所有进程共用同一段
 #     --seed N                  套件随机种子（AndroidWorld）
 #     --n-task-combinations N   AndroidWorld 每任务实例数
@@ -74,6 +76,10 @@
 #     统管全部后端，所有测评进程共用一个租约池 —— 某个进程跑完放出后端，
 #     其他还在跑的进程立刻能抢到。代价是 env 成为单点，且设备 I/O 汇聚到
 #     同一个事件循环，所以默认关闭。
+#   * --max-retry：只对结果行带 error 的任务生效（agent 失败/超时、服务 5xx、
+#     连接失败等）；score=0 的正常失败题不重试，仍由 --rerun-fail 处理。
+#     每次重试重新执行整个任务并获得完整的 --task-timeout；0 只关闭任务级
+#     error 重试，capacity 等待行为不变。
 # =============================================================================
 set -uo pipefail
 
@@ -100,6 +106,7 @@ RESUME=1
 RERUN_FAIL=0
 RERUN_FAIL_DIR=""
 TASK_TIMEOUT=3600
+MAX_RETRY=10
 TASK_INDEX_RANGE=""
 SEED=""
 NCOMB=""
@@ -369,6 +376,7 @@ while [ $# -gt 0 ]; do
     --output)              OUTPUT="${2:?缺数值}"; shift 2 ;;
     --parallel)            PARALLEL="${2:?缺数值}"; shift 2 ;;
     --task-timeout)        TASK_TIMEOUT="${2:?缺数值}"; shift 2 ;;
+    --max-retry)           MAX_RETRY="${2:?缺数值}"; shift 2 ;;
     --task-index-range)    TASK_INDEX_RANGE="${2:?缺数值}"; shift 2 ;;
     --seed)                SEED="${2:?缺数值}"; shift 2 ;;
     --n-task-combinations) NCOMB="${2:?缺数值}"; shift 2 ;;
@@ -413,6 +421,9 @@ for _n in PROCS BACKENDS_PER_ENV ENV_PORT_BASE AGENT_PORT_BASE BACKEND_PORT_BASE
 done
 [ "$PROCS" -ge 1 ] || die "--processes 至少为 1"
 [ "$BACKENDS_PER_ENV" -ge 1 ] || die "--backends-per-env 至少为 1"
+case "$MAX_RETRY" in
+  ''|*[!0-9]*) die "--max-retry 必须是非负整数（当前: $MAX_RETRY）" ;;
+esac
 if [ -n "$TASK_INDEX_RANGE" ]; then
   case "$TASK_INDEX_RANGE" in
     *[!0-9-]*|*-*-*) die "--task-index-range 应写成 A-B（如 1-116），当前: $TASK_INDEX_RANGE" ;;
@@ -827,6 +838,7 @@ cmd_eval() {
       --agent "http://$HOST:$aport"
       --parallel "$parallel"
       --task-timeout "$TASK_TIMEOUT"
+      --max-retry "$MAX_RETRY"
       --evidence-dir "$evdir"
       --output "$out" )
     [ -n "$TASK_INDEX_RANGE" ] && cmd+=( --task-index-range "$TASK_INDEX_RANGE" )
