@@ -508,5 +508,24 @@ def test_runbench_mobileworld_help_lists_options():
         assert option in result.output
 
 
+def test_summary_uses_mobile_world_title(monkeypatch, tmp_path):
+    client = FakeTaskClient(tasks=("GuiTask",), score=1.0)
+    agent_class = make_fake_agent_class()
+    patch_benchmark(monkeypatch, client, agent_class)
+    captured = []
+    monkeypatch.setattr(
+        bench, "_print_summary", lambda results, title: captured.append(title)
+    )
+    output = tmp_path / "results.json"
+
+    run(
+        bench.run_mobileworld_benchmark(
+            server_url="http://localhost:6800", output=str(output)
+        )
+    )
+
+    assert captured == ["MobileWorld Benchmark Summary"]
+
+
 if __name__ == "__main__":
     pytest.main([__file__])

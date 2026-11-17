@@ -1,4 +1,4 @@
-"""Rich per-episode evidence capture for the AndroidWorld benchmark.
+"""Rich per-episode evidence capture for the benchmark runners.
 
 The framework's ``TrajectoryWriter`` already persists a per-run folder
 (``runs/trajectories/<ts>_<uuid>/``) with the agent's raw events, per-step

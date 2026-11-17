@@ -28,14 +28,12 @@ from __future__ import annotations
 import asyncio
 import copy
 import difflib
-import logging
 import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import httpx
-from rich.console import Console
 from rich.table import Table
 
 from mobilerun.agent.droid.droid_agent import MobileAgent
@@ -43,13 +41,14 @@ from mobilerun.agent.droid.events import ManagerPlanEvent
 from mobilerun.agent.external import list_agents
 from mobilerun.agent.utils.llm_loader import load_agent_llms
 from mobilerun.agent.utils.llm_picker import load_llm
-from mobilerun.benchmark.android_world import (
+from mobilerun.benchmark.common import (
+    TaskResult,
     _RETRY_ATTEMPTS,
     _RETRY_BACKOFF_S,
     _RETRY_STATUSES,
     _SCORE_TIMEOUT,
-    TaskResult,
     _finalize_episode_evidence,
+    _infra_error_reason,
     _load_results,
     _load_run_history,
     _load_run_meta,
@@ -59,7 +58,8 @@ from mobilerun.benchmark.android_world import (
     _sanitize_name,
     _setup_benchmark_logging,
     _write_results,
-    _infra_error_reason,
+    console,
+    logger,
 )
 from mobilerun.benchmark.evidence import EpisodeEvidence, gather_ui_tree
 from mobilerun.config_manager import ConfigLoader
@@ -70,9 +70,6 @@ from mobilerun.tools.driver.mobile_world import (
     MobileWorldHttpDriver,
     validate_mobile_world_url,
 )
-
-logger = logging.getLogger("mobilerun")
-console = Console()
 
 _BENCHMARK_NAME = "mobileworld"
 
@@ -739,7 +736,7 @@ async def run_mobileworld_benchmark(
             console.print(f"🗂️  Evidence written to [cyan]{evidence_root}[/]")
 
         ordered = [results[f"{name}#0"] for name in selected if f"{name}#0" in results]
-        _print_summary(ordered)
+        _print_summary(ordered, "MobileWorld Benchmark Summary")
         return not fatal_error
     except asyncio.CancelledError:
         # Ctrl-C: per-task results were already written incrementally.

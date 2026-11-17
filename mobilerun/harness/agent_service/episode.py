@@ -56,10 +56,10 @@ def declared_done(
 ) -> bool:
     """Whether the agent itself declared the episode over.
 
-    Mirrors ``benchmark/android_world.py:1163-1167``: reasoning mode ends with
-    the manager's final answer, direct mode with the ``complete`` tool having
-    set ``shared_state.success``. The environment's score is only trusted when
-    this is true, so the two paths must agree.
+    Mirrors the completion gate in ``run_androidworld_benchmark``: reasoning
+    mode ends with the manager's final answer, direct mode with the
+    ``complete`` tool having set ``shared_state.success``. The environment's
+    score is only trusted when this is true, so the two paths must agree.
     """
     if reasoning:
         return saw_manager_answer
@@ -69,8 +69,8 @@ def declared_done(
 def ensure_embedded_agent(config: MobileConfig) -> None:
     """Refuse external agents: they drive adb directly and bypass our driver.
 
-    runbench applies the same guard (``benchmark/android_world.py:868-876``);
-    without it the leased environment session is never used.
+    runbench applies the same guard in ``run_androidworld_benchmark``; without
+    it the leased environment session is never used.
     """
     from mobilerun.agent.external import list_agents
 

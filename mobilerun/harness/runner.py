@@ -7,10 +7,10 @@ It owns no domain knowledge. For each selected task it
 3. asks the environment to finish and score it,
 4. closes the session and records the row.
 
-Results are written with the benchmark runner's own machinery
-(``TaskResult`` / ``_write_results`` / ``_load_run_history``), so a harness run
-and a ``mobilerun runbench`` run land in files that are directly comparable --
-and resume works the same way in both.
+Results are written with the shared benchmark plumbing
+(``mobilerun.benchmark.common``: ``TaskResult`` / ``_write_results`` /
+``_load_run_history``), so a harness run and a ``mobilerun runbench`` run land
+in files that are directly comparable -- and resume works the same way in both.
 """
 
 from __future__ import annotations
@@ -27,7 +27,7 @@ from rich.console import Console
 from rich.markup import escape
 from rich.table import Table
 
-from mobilerun.benchmark.android_world import (  # shared result/provenance plumbing
+from mobilerun.benchmark.common import (  # shared result/provenance plumbing
     TaskResult,
     _load_results,
     _load_run_history,
@@ -677,7 +677,7 @@ async def run_harness_suite(
         ordered = [
             results[_task_key(task)] for task in selected if _task_key(task) in results
         ]
-        _print_summary(ordered)
+        _print_summary(ordered, "Harness Benchmark Summary")
         if abort.is_set():
             return False
         # A run where every task failed is not a successful invocation.

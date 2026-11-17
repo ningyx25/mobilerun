@@ -284,8 +284,8 @@ WorkflowTimeoutError: Operation timed out after N seconds. Currently active step
 
 早退路径走 `adb.list()` / `adb.device(serial=...)`，**在 driver 工厂分支之前** → 拿不到任何 HTTP driver。因此 benchmark 入口主动拦截：
 
-- `benchmark/android_world.py:868-874`
-- `benchmark/mobile_world.py:406-409`
+- `benchmark/android_world.py::run_androidworld_benchmark`（external-agent guard）
+- `benchmark/mobile_world.py::run_mobileworld_benchmark`（external-agent guard）
 
 ```python
 # "External agents take MobileAgent's early-exit path, which drives adb

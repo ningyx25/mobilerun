@@ -278,9 +278,10 @@ full run is the suite size, not suite size × devices; `--parallel` above the
 number of backends only causes capacity retries. `--seed` and
 `--n-task-combinations` apply to every backend in that mode.
 
-Results are written with the benchmark runner's own plumbing (`TaskResult`,
-`_write_results`, resume history), so a harness file is directly comparable to
-a `mobilerun runbench` file. Provenance adds `env_url`, `agent_url`,
+Results are written with the benchmark common plumbing
+(`mobilerun.benchmark.common`: `TaskResult`, `_write_results`, resume history),
+so a harness file is directly comparable to a `mobilerun runbench` file.
+Provenance adds `env_url`, `agent_url`,
 `agent_env_url`, `agent_id`, the dispatcher's `agents` table,
 `protocol_version`, `max_retry`, and a per-row `attempts` count.
 
