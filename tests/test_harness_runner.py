@@ -1083,3 +1083,25 @@ def test_eval_cli_rejects_invalid_max_retry(monkeypatch, value):
 
     assert result.exit_code == 2
     assert runner.await_count == 0
+
+
+def test_overrides_force_vision_only_for_tree_less_backends():
+    from mobilerun.harness.protocol import AgentOverrides, Capabilities
+
+    overrides = AgentOverrides()
+    forced = runner_module._overrides_for_session(
+        overrides, Capabilities(has_ui_tree=False)
+    )
+    assert forced.vision_only is True
+    assert overrides.vision_only is None
+
+    explicit = AgentOverrides(vision_only=False)
+    kept = runner_module._overrides_for_session(
+        explicit, Capabilities(has_ui_tree=False)
+    )
+    assert kept.vision_only is False
+
+    untouched = runner_module._overrides_for_session(
+        overrides, Capabilities(has_ui_tree=True)
+    )
+    assert untouched is overrides

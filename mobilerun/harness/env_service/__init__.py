@@ -7,6 +7,7 @@ from mobilerun.harness.env_service.backend import (
     MobileWorldBackend,
     create_backend,
 )
+from mobilerun.harness.env_service.mobile_gym_backend import MobileGymBackend
 from mobilerun.harness.env_service.scoring import finish_episode
 from mobilerun.harness.env_service.session import Session, SessionRegistry
 
@@ -14,6 +15,7 @@ __all__ = [
     "AndroidWorldBackend",
     "DriverBackend",
     "EnvBackend",
+    "MobileGymBackend",
     "MobileWorldBackend",
     "Session",
     "SessionRegistry",

@@ -52,6 +52,9 @@ async def finish_episode(
     # 1. Answer-type tasks are graded purely from what the server received.
     if declared_done and answer:
         await backend.submit_answer(answer)
+    # Hand the judge the facts it cannot read from device state (declared-done
+    # gate / final answer) before the score is read.
+    backend.set_finish_context(declared_done=declared_done, answer=answer)
 
     # 2 + 3. Settle, score, and re-check a zero once. Both are AndroidWorld
     # behaviours: MobileWorld exposes no stabilize endpoint and runbench scores

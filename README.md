@@ -257,13 +257,42 @@ produces one full-suite score per model.
 | agent service | `9301 + (i-1)` |
 | model endpoint (sglang / OpenAI-compatible) | `29100 + (i-1)` |
 
-Both harness backends are supported. `--backend-kind mobile-world` switches the
-environment side to MobileWorld servers (one port = one device), whose port
-base then defaults to `6801`:
+`eval.sh` supports AndroidWorld and MobileWorld backends.
+`--backend-kind mobile-world` switches the environment side to MobileWorld
+servers (one port = one device), whose port base then defaults to `6801`:
 
 ```bash
 ./eval.sh --backend-kind mobile-world          # 6801.., mobile-world@http://host:port
 ./eval.sh --backend-kind mobile-world --backend-port-base 7001   # explicit base
+```
+
+MobileGym is also available to the harness, but not through `eval.sh`: it has
+no environment server (the simulator is a browser SPA), so `mobilerun serve env`
+hosts it in-process. Point `mobilerun eval` at that service:
+
+```bash
+export PYTHONPATH=/path/to/mobilegym
+mobilerun serve env \
+  --backends 'mg0=mobile-gym@https://localhost:4180?split=test' --port 9001
+mobilerun eval --env http://localhost:9001 --agent http://localhost:9100 \
+  --backend mg0 --tasks '<task-id>' --output runs/mobilegym.json
+```
+
+The simulator is vision-only, one backend is one Chromium page, and the
+`serve env` URL accepts `split` / `headless` / `startup_timeout` /
+`browser_path` options. See the harness README for details.
+
+For a multi-model MobileGym run with the same lifecycle as `eval.sh`
+(`start` / `eval` / `status` / `stop` / `logs`), use the dedicated
+[`./eval_mobilegym.sh`](eval_mobilegym.sh):
+
+```bash
+./eval_mobilegym.sh --processes 4 --backends-per-env 1 --split test
+./eval_mobilegym.sh status | stop
+
+# model endpoint can be remote/third-party; --host stays for env/agent services
+./eval_mobilegym.sh --processes 1 --models gpt-4o \
+  --model-base-url https://api.openai.com/v1 --no-model-check
 ```
 
 By default each process owns its own environment service and its 4 backends, so

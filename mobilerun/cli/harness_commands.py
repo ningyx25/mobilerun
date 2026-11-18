@@ -74,7 +74,9 @@ def serve() -> None:
     "--backends",
     required=True,
     help="Comma-separated id=kind@url (or id=url) pairs, e.g. "
-    "aw0=android-world@http://localhost:5000,aw1=http://localhost:5001",
+    "aw0=android-world@http://localhost:5000,aw1=http://localhost:5001. "
+    "MobileGym must name its kind explicitly and may carry options in the "
+    "URL query, e.g. 'mg0=mobile-gym@https://localhost:4180?split=test'.",
 )
 @click.option("--host", default="127.0.0.1", help="Bind address")
 @click.option("--port", default=9000, type=int, help="Bind port")
@@ -101,7 +103,7 @@ def serve_env(
     for backend_id, kind, url in parsed:
         try:
             instances.append(create_backend(kind, backend_id, url))
-        except ValueError as exc:
+        except (ValueError, ImportError) as exc:
             raise click.ClickException(str(exc)) from exc
 
     try:

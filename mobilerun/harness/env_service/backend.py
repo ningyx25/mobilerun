@@ -160,6 +160,16 @@ class EnvBackend(ABC):
     async def submit_answer(self, text: str) -> None:  # noqa: B027 - optional hook
         """Forward an answer for answer-graded tasks (best effort)."""
 
+    def set_finish_context(  # noqa: B027 - optional hook
+        self, *, declared_done: bool, answer: Optional[str] = None
+    ) -> None:
+        """Record end-of-episode facts before ``evaluate()``.
+
+        ``evaluate()`` takes no arguments because most backends read the score
+        from a server. Backends whose judge consumes the declared-done gate or
+        the final answer (MobileGym's ``ExecutionResult``) override this.
+        """
+
     @abstractmethod
     async def evaluate(self) -> tuple[float, str]:
         """Read the task's current score (and the environment's own reason)."""
@@ -606,10 +616,7 @@ class MobileWorldBackend(DriverBackend):
         return self._active
 
 
-_BACKEND_KINDS = {
-    "android-world": AndroidWorldBackend,
-    "mobile-world": MobileWorldBackend,
-}
+_BACKEND_KINDS = frozenset({"android-world", "mobile-world", "mobile-gym"})
 
 
 def create_backend(
@@ -624,6 +631,13 @@ def create_backend(
         return MobileWorldBackend(backend_id, url, device=(options or {}).get("device"))
     if kind == "android-world":
         return AndroidWorldBackend(backend_id, url)
+    if kind == "mobile-gym":
+        # Lazy: pulls in bench_env only when this kind is requested.
+        from mobilerun.harness.env_service.mobile_gym_backend import (
+            MobileGymBackend,
+        )
+
+        return MobileGymBackend(backend_id, url)
     raise ValueError(
         f"Unknown backend kind '{kind}'; expected one of {sorted(_BACKEND_KINDS)}"
     )

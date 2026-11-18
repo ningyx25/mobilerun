@@ -410,3 +410,28 @@ def test_backends_without_stabilization_are_scored_once():
     assert response.status_code == 200
     assert backend.stabilize_count == 0
     assert backend.score_reads == 1
+
+
+class _ContextBackend(ScriptedBackend):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.contexts = []
+
+    def set_finish_context(self, *, declared_done, answer=None):
+        self.contexts.append((declared_done, answer))
+
+
+def test_finish_context_is_set_before_scoring():
+    backend = _ContextBackend(tasks=["Alpha"])
+    with make_client(backend) as client:
+        session_id = client.post("/v1/sessions", json={"task_id": "Alpha"}).json()[
+            "session_id"
+        ]
+        response = client.post(
+            f"/v1/sessions/{session_id}/finish",
+            json={"declared_done": True, "answer": "42"},
+        )
+
+    assert response.status_code == 200
+    assert backend.contexts == [(True, "42")]
+    assert backend.score_reads == 1

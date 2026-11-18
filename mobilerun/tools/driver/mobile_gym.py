@@ -19,8 +19,11 @@ converted the agent's 0-1000 grid into native pixels.
 
 from __future__ import annotations
 
+import asyncio
 import logging
-from typing import Any, Dict, List, Optional
+import time
+from types import SimpleNamespace
+from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 
 from mobilerun_core_local.driver.base import DeviceDriver, unsupported
@@ -31,6 +34,114 @@ logger = logging.getLogger("mobilerun")
 # travels in ``device.serial`` (mirrors android-world / mobile-world).
 MOBILE_GYM_CONNECTION = "mobile-gym"
 MOBILE_GYM_DEFAULT_URL = "https://localhost:4180"
+
+# Task catalogue defaults shared by the runbench runner and the env backend.
+MOBILE_GYM_DEFAULT_MAX_STEPS = 30
+MOBILE_GYM_DIFFICULTY_MAP = {
+    "L1": "easy",
+    "L2": "medium",
+    "L3": "hard",
+    "L4": "hard",
+}
+
+_BENCH_ENV_HINT = (
+    "MobileGym support requires the 'bench_env' package from the mobilegym "
+    "repository on PYTHONPATH (e.g. export PYTHONPATH=/path/to/mobilegym), "
+    "plus Playwright: install the 'mobilegym' extra and run "
+    "`playwright install chromium`."
+)
+
+
+def load_bench_env() -> SimpleNamespace:
+    """Import the optional ``bench_env`` API with an actionable error."""
+    try:
+        import bench_env  # noqa: F401
+        from bench_env.env.mobile_gym import MobileGymEnv
+        from bench_env.runner.base import Controller, Evaluator, ExecutionResult
+        from bench_env.splits import base_task_id, resolve_split
+        from bench_env.task.registry import TaskRegistry
+    except ImportError as exc:
+        raise ImportError(_BENCH_ENV_HINT) from exc
+    return SimpleNamespace(
+        MobileGymEnv=MobileGymEnv,
+        Controller=Controller,
+        Evaluator=Evaluator,
+        ExecutionResult=ExecutionResult,
+        base_task_id=base_task_id,
+        resolve_split=resolve_split,
+        TaskRegistry=TaskRegistry,
+    )
+
+
+async def wait_for_sim(page: Any, timeout: float = 60.0) -> None:
+    """Poll ``window.__SIM__.getState`` until the simulator is initialized."""
+    deadline = time.monotonic() + max(1.0, timeout)
+    while True:
+        try:
+            ready = await page.evaluate(
+                "() => Boolean(window.__SIM__ && "
+                "typeof window.__SIM__.getState === 'function' && "
+                "window.__SIM__.getState())"
+            )
+            if ready:
+                return
+        except Exception:  # noqa: BLE001 - page still loading
+            pass
+        if time.monotonic() >= deadline:
+            raise RuntimeError(
+                f"MobileGym simulator did not become ready within {timeout:.0f}s"
+            )
+        await asyncio.sleep(0.5)
+
+
+def discover_tasks(
+    be: SimpleNamespace,
+    *,
+    split_ids: Optional[set] = None,
+    registry: Any = None,
+) -> Tuple[List[Any], Dict[str, Dict[str, Any]]]:
+    """Discover tasks, apply an optional split, and build runner metadata.
+
+    The returned task instances are for metadata only; callers that prepare
+    episodes must create a fresh instance (``TaskRegistry.create_task``) so
+    ``Controller.setup``'s mutations (e.g. the grounded answer-sheet hint on
+    ``task.task_name``) do not accumulate.
+    """
+    registry = registry or be.TaskRegistry()
+    discovered = registry.discover_all()
+    if split_ids is not None:
+        discovered = [t for t in discovered if be.base_task_id(t.id) in split_ids]
+
+    metadata: Dict[str, Dict[str, Any]] = {
+        task.id: {
+            "difficulty": MOBILE_GYM_DIFFICULTY_MAP.get(
+                str(getattr(task, "difficulty", "")), ""
+            ),
+            "max_steps": int(
+                getattr(task, "max_steps", None) or MOBILE_GYM_DEFAULT_MAX_STEPS
+            ),
+            "apps": ",".join(getattr(task, "apps", []) or []),
+        }
+        for task in discovered
+    }
+    return discovered, metadata
+
+
+def resolve_app_identifier(env: Any, name: str) -> str:
+    """Map a MobileGym app label (Chinese/English) to its app id.
+
+    ``harness.actions._resolve_package`` only knows installed package ids; it
+    does not know ``APP_NAME_MAP`` labels such as ``微信``. Translating before
+    the generic action dispatch keeps ``open_app`` working on the harness path.
+    """
+    app = str(name or "").strip()
+    if not app:
+        return app
+    name_map = getattr(env, "APP_NAME_MAP", {}) or {}
+    if app in name_map:
+        return str(name_map[app])
+    lowered = {str(k).strip().lower(): str(v) for k, v in name_map.items()}
+    return lowered.get(app.lower(), app)
 
 # The simulator only exposes three system buttons. ``press_key_code`` maps the
 # matching Android keycodes onto them.
@@ -82,6 +193,11 @@ class MobileGymBrowserDriver(DeviceDriver):
     def __init__(self, env: Any) -> None:
         self.env = env
         self._answer: str = ""
+        self._connected = False
+
+    def attach_env(self, env: Any) -> None:
+        """Attach a started env when the caller owns its lifecycle."""
+        self.env = env
         self._connected = False
 
     # -- lifecycle ---------------------------------------------------------

@@ -13,7 +13,7 @@ Two services, one wire contract:
           │  ┌──────────────┐  │   │ backends:             │
           │  │ agent worker │  │   │  android-world :500*  │
           │  │ (library:    │  │   │  mobile-world  :680*  │
-          │  │  create_     │  │   │                       │
+          │  │  create_     │  │   │  mobile-gym (browser) │
           │  │  agent_app)  │  │   │                       │
           │  │ MobileAgent  │  │   │                       │
           │  │ +RemoteEnv   │──┼──▶│                       │
@@ -110,6 +110,49 @@ Semantics that matter:
 * **Sessions expire.** Abandoned sessions are torn down after `--session-ttl`
   (default 2 h) so a crashed client cannot hold a device forever.
 
+### MobileGym backend
+
+MobileGym has no environment server: `https://localhost:4180` is a React SPA
+and `bench_env` drives it through Playwright **in the environment-service
+process**. One backend is therefore one browser page, not one HTTP endpoint:
+
+```bash
+export PYTHONPATH=/path/to/mobilegym      # bench_env lives in that repo
+mobilerun serve env \
+  --backends 'mg0=mobile-gym@https://localhost:4180?split=test'
+```
+
+Backend URL options (query string, checked at startup):
+
+| option | default | meaning |
+|---|---|---|
+| `split` | `test` | `bench_env` split name, `name+name` union, or a file path; `+` is preserved |
+| `headless` | `true` | launch Chromium headless |
+| `startup_timeout` | `120` | seconds to wait for the simulator to become ready |
+| `browser_path` | — | optional executable path for Playwright (escape hatch when the installed Playwright cannot fetch its bundled Chromium) |
+
+Details worth knowing:
+
+- **Vision-only.** The simulator has no accessibility tree; the backend
+  advertises `has_ui_tree=false` and omits `get_ui_tree` from its verbs.
+  `mobilerun eval` automatically sets `vision_only=true` for tree-less
+  backends unless the caller explicitly overrides it.
+- **One backend = one Chromium.** Parallelism needs multiple backends, e.g.
+  `mg0=...,mg1=...` (each opens its own page against the same simulator URL).
+  Budget for memory; Chromium also consumes inotify instances.
+- **Mixed kinds are not task-aware.** `SessionRegistry` leases the first free
+  backend regardless of kind, so run a dedicated `serve env` for MobileGym
+  (or pin `mobilerun eval --backend mg0`) rather than mixing it with
+  android-world/mobile-world in one service.
+- **No suite seeding.** `reinitialize` is a no-op; `--seed` /
+  `--n-task-combinations` do not apply.
+- **Judge errors are scoreable.** A deterministic judge failure returns score
+  0 with `JudgeError:` in `eval_reason` instead of an infra error, so it is
+  not retried by `--max-retry`; device/state read failures do return a
+  retryable 503.
+- `result.server_url` records the environment-service URL, not the simulator
+  URL (the latter is in the backend's `/v1/health.url`).
+
 ## Agent service
 
 Phase one — the agent runs its own loop against an environment session:
@@ -165,6 +208,12 @@ mobilerun eval --env http://localhost:9000 --agent http://localhost:9100 \
 mobilerun eval --env http://localhost:9000 --agent http://localhost:9100 \
     --rerun-fail runs/qwen3vl8b_golden_aw.json \
     --output runs/qwen3vl8b_rerun.json
+
+# MobileGym: one in-process browser per backend (bench_env on PYTHONPATH)
+PYTHONPATH=/path/to/mobilegym mobilerun serve env \
+    --backends 'mg0=mobile-gym@https://localhost:4180?split=test' --port 9001
+mobilerun eval --env http://localhost:9001 --agent http://localhost:9100 \
+    --backend mg0 --tasks '<task-id>' --output runs/mobilegym_smoke.json
 ```
 
 `--rerun-fail PATH` reads a completed results file and selects only its failed

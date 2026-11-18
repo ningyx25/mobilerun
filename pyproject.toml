@@ -91,13 +91,19 @@ langfuse = [
     "llama-index-instrumentation"
 ]
 mobilegym = [
-    # `mobilerun runbench --benchmark-name mobilegym` embeds bench_env from the
-    # sibling mobilegym repository (PYTHONPATH=/path/to/mobilegym) and drives
-    # the simulator in-process with Playwright. After installing this extra,
-    # also run `playwright install chromium`.
+    # `mobilerun runbench --benchmark-name mobilegym` and the
+    # `mobilerun serve env --backends mg0=mobile-gym@...` backend embed
+    # bench_env from the sibling mobilegym repository
+    # (PYTHONPATH=/path/to/mobilegym) and drive the simulator in-process with
+    # Playwright. After installing this extra, also run
+    # `playwright install chromium` (or pass `?browser_path=...` to serve env
+    # when the installed Playwright cannot fetch its bundled browser).
+    # Pinned to 1.48: its bundled Chromium revision (1140) still installs and
+    # runs on Ubuntu 20.04; newer Playwright releases refuse to install a
+    # browser on 20.04. On newer hosts this is old but functional.
     # bench_env's own requirements minus openai (mobilerun pins its own
     # llama-index-llms-openai stack; do not pull a conflicting openai here).
-    "playwright>=1.40",
+    "playwright==1.48.0",
     "Pillow>=13.0.0",
     "tqdm>=4.66",
     "opencc-python-reimplemented>=0.1.7",

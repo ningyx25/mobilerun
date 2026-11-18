@@ -80,6 +80,8 @@
 #     连接失败等）；score=0 的正常失败题不重试，仍由 --rerun-fail 处理。
 #     每次重试重新执行整个任务并获得完整的 --task-timeout；0 只关闭任务级
 #     error 重试，capacity 等待行为不变。
+#   * MobileGym 不用本脚本：它没有独立的环境服务（模拟器是 in-process 浏览器），
+#     用单独的 ./eval_mobilegym.sh（用法与 start/eval/status/stop 一致）。
 # =============================================================================
 set -uo pipefail
 

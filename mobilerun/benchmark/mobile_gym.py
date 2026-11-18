@@ -58,18 +58,23 @@ from mobilerun.benchmark.evidence import EpisodeEvidence, gather_ui_tree
 from mobilerun.config_manager import ConfigLoader
 from mobilerun.tools.driver.mobile_gym import (
     MOBILE_GYM_CONNECTION,
+    MOBILE_GYM_DEFAULT_MAX_STEPS,
     MOBILE_GYM_DEFAULT_URL,
+    MOBILE_GYM_DIFFICULTY_MAP,
     MobileGymBrowserDriver,
+    discover_tasks as _discover_tasks,
+    load_bench_env as _import_bench_env,
     validate_mobile_gym_url,
+    wait_for_sim as _wait_for_sim,
 )
 
 _BENCHMARK_NAME = "mobilegym"
-_DEFAULT_MAX_STEPS = 30
+_DEFAULT_MAX_STEPS = MOBILE_GYM_DEFAULT_MAX_STEPS
 _DEFAULT_SIM_URL = MOBILE_GYM_DEFAULT_URL
 
 # bench_env classifies difficulty as L1..L4; runbench's --difficulty uses the
 # easy/medium/hard vocabulary shared with the other two benchmarks.
-_DIFFICULTY_MAP = {"L1": "easy", "L2": "medium", "L3": "hard", "L4": "hard"}
+_DIFFICULTY_MAP = MOBILE_GYM_DIFFICULTY_MAP
 
 # Provenance fields that, when changed, make resumed records incomparable.
 _MOBILEGYM_RESUME_FIELDS = (
@@ -81,52 +86,6 @@ _MOBILEGYM_RESUME_FIELDS = (
 )
 
 
-def _import_bench_env() -> SimpleNamespace:
-    """Import the optional ``bench_env`` package with an actionable error."""
-    try:
-        import bench_env  # noqa: F401
-        from bench_env.env.mobile_gym import MobileGymEnv
-        from bench_env.runner.base import Controller, Evaluator, ExecutionResult
-        from bench_env.splits import base_task_id, resolve_split
-        from bench_env.task.registry import TaskRegistry
-    except ImportError as exc:
-        raise ImportError(
-            "MobileGym benchmark requires the 'bench_env' package from the "
-            "mobilegym repository. Add it to sys.path, e.g. "
-            "export PYTHONPATH=/home/swaydy/docker-proj/test-some-idea/mobilegym"
-        ) from exc
-    return SimpleNamespace(
-        MobileGymEnv=MobileGymEnv,
-        Controller=Controller,
-        Evaluator=Evaluator,
-        ExecutionResult=ExecutionResult,
-        base_task_id=base_task_id,
-        resolve_split=resolve_split,
-        TaskRegistry=TaskRegistry,
-    )
-
-
-async def _wait_for_sim(page: Any, timeout: float = 60.0) -> None:
-    """Poll ``window.__SIM__.getState`` until the simulator is initialized."""
-    deadline = time.monotonic() + max(1.0, timeout)
-    while True:
-        try:
-            ready = await page.evaluate(
-                "() => Boolean(window.__SIM__ && "
-                "typeof window.__SIM__.getState === 'function' && "
-                "window.__SIM__.getState())"
-            )
-            if ready:
-                return
-        except Exception:  # noqa: BLE001 - page still loading
-            pass
-        if time.monotonic() >= deadline:
-            raise RuntimeError(
-                f"MobileGym simulator did not become ready within {timeout:.0f}s"
-            )
-        await asyncio.sleep(0.5)
-
-
 def _load_task_list(
     be: SimpleNamespace,
     *,
@@ -136,23 +95,13 @@ def _load_task_list(
     difficulty: Sequence[str],
 ) -> Tuple[List[Any], Dict[str, Dict[str, Any]]]:
     """Discover MobileGym tasks, apply the split, then the runbench filters."""
-    discovered = be.TaskRegistry().discover_all()
-    if split:
-        split_ids = be.resolve_split(split)
-        discovered = [t for t in discovered if be.base_task_id(t.id) in split_ids]
+    split_ids = be.resolve_split(split) if split else None
+    discovered, metadata = _discover_tasks(be, split_ids=split_ids)
     if not discovered:
         raise ValueError(
             "No MobileGym tasks found (check --split and PYTHONPATH/bench_env)."
         )
 
-    metadata: Dict[str, Dict[str, Any]] = {
-        task.id: {
-            "difficulty": _DIFFICULTY_MAP.get(str(getattr(task, "difficulty", "")), ""),
-            "max_steps": int(getattr(task, "max_steps", None) or _DEFAULT_MAX_STEPS),
-            "apps": ",".join(getattr(task, "apps", []) or []),
-        }
-        for task in discovered
-    }
     selected = _select_tasks(
         list(metadata),
         tasks=tasks,

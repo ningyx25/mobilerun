@@ -42,6 +42,7 @@ from mobilerun.harness.client import AgentClient, EnvClient, ServiceError
 from mobilerun.harness.protocol import (
     PROTOCOL_VERSION,
     AgentOverrides,
+    Capabilities,
     EnvironmentRef,
     EpisodeEvidenceConfig,
     EpisodeLimits,
@@ -125,6 +126,24 @@ def _task_key(task: TaskSpec) -> str:
     """Stable result key, matching ``TaskResult.key`` (``"<name>#<idx>"``)."""
     name, _, idx_text = task.id.partition("#")
     return f"{name}#{int(idx_text or 0)}"
+
+
+def _overrides_for_session(
+    overrides: AgentOverrides, capabilities: Optional[Capabilities]
+) -> AgentOverrides:
+    """Force a screenshot-only agent when the backend has no a11y tree.
+
+    MobileGym (and any other DOM-only environment) advertises
+    ``has_ui_tree=False``; a default agent would otherwise pick the tree-based
+    state provider and see an empty panel. An explicit caller override wins.
+    """
+    if (
+        overrides.vision_only is None
+        and capabilities is not None
+        and capabilities.has_ui_tree is False
+    ):
+        return overrides.model_copy(update={"vision_only": True})
+    return overrides
 
 
 def _failed_task_keys(path: Path) -> tuple[set[str], Dict[str, Any]]:
@@ -239,6 +258,7 @@ async def _run_one(
         result.start_on_home_screen = session.task.start_on_home_screen
         result.max_steps = steps or session.task.max_steps
 
+        episode_overrides = _overrides_for_session(overrides, session.capabilities)
         episode = await agent.start_episode(
             EpisodeRequest(
                 goal=session.task.instruction,
@@ -246,7 +266,7 @@ async def _run_one(
                     base_url=agent_env_url or env.base_url, session_id=session_id
                 ),
                 agent_id=agent_id,
-                overrides=overrides,
+                overrides=episode_overrides,
                 limits=EpisodeLimits(
                     max_steps=steps or session.task.max_steps,
                     timeout_s=task_timeout,
