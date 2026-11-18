@@ -69,6 +69,7 @@ class Session:
     )
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     finish_result: Optional[FinishResponse] = None
+    finish_error: Optional[ProtocolError] = None
     torn_down: bool = False
     _step_results: "OrderedDict[int, StepResponse]" = field(default_factory=OrderedDict)
 
@@ -188,6 +189,11 @@ class Session:
         async with self.lock:
             if self.finish_result is not None:
                 return self.finish_result
+            if self.finish_error is not None:
+                # An HTTP retry of a failed score must see the real cause, not
+                # a generic 409. Scoring already ran (and may have side
+                # effects), so replay instead of scoring again.
+                raise self.finish_error
             self._require_running()
             self.state = SessionState.FINISHING
             try:
@@ -199,11 +205,12 @@ class Session:
                 )
             except Exception as exc:
                 self.state = SessionState.ERROR
-                raise ProtocolError(
+                self.finish_error = ProtocolError(
                     502,
                     ErrorCode.BACKEND_UNAVAILABLE,
                     f"Scoring failed: {type(exc).__name__}: {exc}",
-                ) from exc
+                )
+                raise self.finish_error from exc
             self.finish_result = result
             self.state = SessionState.CLOSED
             return result

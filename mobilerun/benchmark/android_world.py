@@ -53,6 +53,7 @@ from mobilerun.benchmark.common import (  # backward-compatible re-exports
     _build_summary as _build_summary,
     _finalize_episode_evidence as _finalize_episode_evidence,
     _infra_error_reason as _infra_error_reason,
+    _unrecognised_failure_reason as _unrecognised_failure_reason,
     _load_results as _load_results,
     _load_run_history as _load_run_history,
     _load_run_meta as _load_run_meta,
@@ -746,6 +747,10 @@ async def run_androidworld_benchmark(
                 else:
                     declared_done = agent.shared_state.success is not None
                 result.finished = declared_done
+                if result.error is None:
+                    result.error = _unrecognised_failure_reason(
+                        run_result, declared_done=declared_done
+                    )
 
                 # Answer-type tasks (information retrieval) are graded only
                 # from the text the agent submits via the `answer` action into

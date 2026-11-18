@@ -355,19 +355,20 @@ def _sanitize_name(value: str) -> str:
 
 
 def _infra_error_reason(run_result: Any) -> str | None:
-    """Infra-failure reason from an episode result, if the episode died on one.
+    """Infra-failure or episode-timeout reason from an episode result.
 
     A transient provider failure (429 cooldown, request timeout, disconnect)
     is absorbed by the agent into ``reason="Error: ..."`` with no exception,
-    so without this check ``--resume`` would treat the poisoned 0-score
-    record as final and never retry it. The explicit ``error_kind`` set by
-    MobileAgent wins; the reason-text scan is the fallback for older paths.
+    and an episode deadline (``timed out after Ns`` / ``WorkflowTimeoutError``)
+    is reported as an ordinary failure, so without this check ``--resume``
+    would treat the poisoned 0-score record as final and never retry it. The
+    explicit ``error_kind`` set by MobileAgent wins; the reason-text scan is
+    the fallback for older paths.
     """
     kind = getattr(run_result, "error_kind", None)
-    if kind:
-        reason = str(getattr(run_result, "reason", "") or "")
-        return f"InfraError: {reason[:300]}"
     reason = str(getattr(run_result, "reason", "") or "")
+    if kind:
+        return f"InfraError: {reason[:300]}"
     if reason.startswith("Error:"):
         text = reason.lower()
         markers = (
@@ -382,7 +383,37 @@ def _infra_error_reason(run_result: Any) -> str | None:
         )
         if any(marker in text for marker in markers):
             return f"InfraError: {reason[:300]}"
+    # An episode deadline is not a task failure: the agent never declared the
+    # episode over, so its 0 score says nothing about the model. Only
+    # unsuccessful results qualify; a successful run's reason is free text.
+    lowered = reason.lower()
+    if getattr(run_result, "success", None) is False and (
+        lowered.startswith("timed out after ")
+        or lowered.startswith("workflowtimeouterror")
+    ):
+        return f"InfraError: {reason[:300]}"
     return None
+
+
+def _unrecognised_failure_reason(
+    run_result: Any, *, declared_done: bool
+) -> str | None:
+    """Default-deny error for a failure that never declared completion.
+
+    Normal endings are a whitelist: success, an agent-declared failure
+    (``declared_done``), and ``max_steps``. Any other unsuccessful result --
+    including a future agent error with an unrecognised reason -- is abnormal
+    and must be recorded as an error so ``--resume`` / ``--max-retry`` retry
+    it instead of keeping a silent 0-score row.
+    """
+    if getattr(run_result, "success", None) is not False:
+        return None
+    if declared_done:
+        return None
+    reason = str(getattr(run_result, "reason", "") or "")
+    if reason.startswith("max_steps ("):
+        return None
+    return f"agent episode failed without declaring completion: {reason[:300]}"
 
 
 def _new_run_id() -> str:

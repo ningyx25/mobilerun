@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -15,7 +16,15 @@ from mobilerun.harness.agent_service.app import create_agent_app
 from mobilerun.harness.client import AgentClient, EnvClient
 from mobilerun.harness.drivers import RemoteEnvDriver
 from mobilerun.harness.env_service.app import create_env_app
-from mobilerun.harness.protocol import TaskSpec
+from mobilerun.harness.protocol import (
+    AgentOverrides,
+    Capabilities,
+    EpisodeInfo,
+    EpisodeResult,
+    EpisodeState,
+    FinishResponse,
+    TaskSpec,
+)
 from mobilerun.harness.runner import _select_tasks
 from mobilerun.harness.testing import ScriptedBackend
 from tests.test_harness_agent_service import _fake_agent_class
@@ -1105,3 +1114,268 @@ def test_overrides_force_vision_only_for_tree_less_backends():
         overrides, Capabilities(has_ui_tree=True)
     )
     assert untouched is overrides
+
+
+# ---------------------------------------------------------------------------
+# Abnormal episode endings must carry an error
+# ---------------------------------------------------------------------------
+
+
+class _RunOneEnv:
+    base_url = "http://env.test"
+
+    def __init__(self):
+        self.finish_calls = 0
+        self.finish_declared_done = []
+        self.task = TaskSpec(
+            id="Alpha#0", backend="fake", instruction="do Alpha", max_steps=5
+        )
+        self.capabilities = Capabilities()
+
+    async def create_session(self, *args, **kwargs):
+        return SimpleNamespace(
+            session_id="s1", task=self.task, capabilities=self.capabilities
+        )
+
+    async def finish(self, session_id, *, declared_done, answer=None):
+        self.finish_calls += 1
+        self.finish_declared_done.append(declared_done)
+        return FinishResponse(score=0.0, gated_score=0.0, declared_done=declared_done)
+
+    async def delete_session(self, session_id):
+        pass
+
+
+class _RunOneAgent:
+    base_url = "http://agent.test"
+
+    def __init__(self, *, final, running_info=None):
+        self.final = final
+        self.running_info = running_info or final
+        self.cancelled = False
+
+    async def start_episode(self, request):
+        return EpisodeInfo(
+            episode_id="ep1",
+            state=EpisodeState.RUNNING,
+            created_at="2026-01-01T00:00:00Z",
+        )
+
+    async def wait_episode(self, episode_id, *, timeout_s, poll_s=1.0):
+        return self.running_info
+
+    async def cancel_episode(self, episode_id):
+        self.cancelled = True
+
+    async def get_episode(self, episode_id):
+        return self.final
+
+
+def _run_one_case(final, *, running_info=None, task_timeout=30.0):
+    env, agent = _RunOneEnv(), _RunOneAgent(final=final, running_info=running_info)
+    result, _ = asyncio.run(
+        runner_module._run_one(
+            _task("Alpha#0"),
+            env=env,
+            agent=agent,
+            agent_env_url=None,
+            overrides=AgentOverrides(),
+            steps=None,
+            task_timeout=task_timeout,
+            seed=None,
+            evidence=False,
+            evidence_root=None,
+            backend=None,
+            run_id="r-test",
+        )
+    )
+    return result, env, agent
+
+
+def _episode(state, *, result=None):
+    return EpisodeInfo(
+        episode_id="ep1",
+        state=state,
+        created_at="2026-01-01T00:00:00Z",
+        result=result,
+    )
+
+
+def test_agent_episode_timeout_sets_error_and_is_not_scored():
+    final = _episode(
+        EpisodeState.FAILED,
+        result=EpisodeResult(
+            success=False,
+            declared_done=False,
+            reason="timed out after 600s",
+            steps=3,
+        ),
+    )
+    result, env, _ = _run_one_case(final)
+
+    assert result.error.startswith("InfraError:")
+    assert "timed out after 600s" in result.error
+    assert result.reason == "timed out after 600s"
+    assert result.score is None
+    assert result.gated_score is None
+    assert env.finish_calls == 0
+
+
+def test_workflow_timeout_reason_sets_error():
+    final = _episode(
+        EpisodeState.FAILED,
+        result=EpisodeResult(
+            success=False,
+            declared_done=False,
+            reason="WorkflowTimeoutError: Operation timed out after 30 seconds",
+        ),
+    )
+    result, env, _ = _run_one_case(final)
+
+    assert result.error.startswith("InfraError:")
+    assert "WorkflowTimeoutError" in result.error
+    assert env.finish_calls == 0
+
+
+def test_agent_declared_max_steps_failure_stays_error_free():
+    final = _episode(
+        EpisodeState.FAILED,
+        result=EpisodeResult(
+            success=False,
+            declared_done=False,
+            reason="max_steps (50) reached",
+            steps=50,
+        ),
+    )
+    result, env, _ = _run_one_case(final)
+
+    assert result.error is None
+    assert env.finish_calls == 1
+    assert env.finish_declared_done == [False]
+    assert result.score == 0.0
+    assert result.gated_score == 0.0
+
+
+def test_agent_declared_failure_stays_error_free():
+    final = _episode(
+        EpisodeState.FAILED,
+        result=EpisodeResult(
+            success=False,
+            declared_done=True,
+            reason="could not find the screen",
+        ),
+    )
+    result, env, _ = _run_one_case(final)
+
+    assert result.error is None
+    assert env.finish_calls == 1
+    assert env.finish_declared_done == [True]
+
+
+def test_cancelled_episode_sets_error_and_is_not_scored():
+    final = _episode(
+        EpisodeState.CANCELLED,
+        result=EpisodeResult(success=False, reason="cancelled"),
+    )
+    result, env, _ = _run_one_case(final)
+
+    assert result.error == "agent episode was cancelled"
+    assert env.finish_calls == 0
+
+
+@pytest.mark.parametrize("state", [EpisodeState.FAILED, EpisodeState.SUCCEEDED])
+def test_terminal_state_without_result_sets_error(state):
+    result, env, _ = _run_one_case(_episode(state, result=None))
+
+    assert "without a result" in result.error
+    assert env.finish_calls == 0
+
+
+def test_runner_wait_timeout_is_not_overwritten_by_cancel():
+    running = _episode(EpisodeState.RUNNING)
+    final = _episode(
+        EpisodeState.CANCELLED,
+        result=EpisodeResult(success=False, reason="cancelled"),
+    )
+    result, env, agent = _run_one_case(final, running_info=running, task_timeout=30.0)
+
+    assert agent.cancelled is True
+    assert result.error == "agent episode timed out after 30s"
+    assert env.finish_calls == 0
+
+
+def test_agent_absorbed_provider_failure_is_an_infra_error():
+    final = _episode(
+        EpisodeState.FAILED,
+        result=EpisodeResult(
+            success=False,
+            declared_done=False,
+            reason=("Error: Error code: 429 - {'error': {'code': 'model_cooldown'}}"),
+        ),
+    )
+    result, env, _ = _run_one_case(final)
+
+    assert result.error.startswith("InfraError:")
+    assert env.finish_calls == 0
+
+
+def test_timeout_reason_flows_through_the_agent_service(tmp_path, monkeypatch):
+    import sys
+
+    original = _fake_agent_class
+    monkeypatch.setattr(
+        sys.modules[__name__],
+        "_fake_agent_class",
+        lambda: original(success=False, reason="timed out after 600s"),
+    )
+
+    async def scenario():
+        backend = ScriptedBackend(tasks=["Alpha"])
+        output = tmp_path / "results.json"
+        async with _Wiring(backend, monkeypatch):
+            ok = await runner_module.run_harness_suite(
+                "http://env.test",
+                "http://agent.test",
+                output=str(output),
+                max_retry=0,
+                capture_evidence=False,
+                health_timeout=5.0,
+                task_timeout=30.0,
+            )
+            return ok, output
+
+    ok, output = _run(scenario())
+    payload = json.loads(output.read_text())
+    row = payload["tasks"][0]
+
+    assert ok is False
+    assert row["error"].startswith("InfraError:")
+    assert "timed out after 600s" in row["error"]
+    assert row["score"] is None
+    assert row["gated_score"] is None
+    assert payload["summary"]["errors"] == 1
+
+
+def test_unknown_failed_reason_is_an_error_by_default():
+    final = _episode(
+        EpisodeState.FAILED,
+        result=EpisodeResult(
+            success=False,
+            declared_done=False,
+            reason="watchdog aborted the episode",
+        ),
+    )
+    result, env, _ = _run_one_case(final)
+
+    assert result.error.startswith("agent episode failed without declaring completion:")
+    assert "watchdog aborted the episode" in result.error
+    assert env.finish_calls == 0
+
+
+def test_unknown_episode_state_is_an_error_by_default():
+    final = SimpleNamespace(state="aborted", result=None, error=None)
+
+    error = runner_module._abnormal_end_reason(final)
+
+    assert error is not None
+    assert "unexpected state" in error

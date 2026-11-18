@@ -29,6 +29,7 @@ from rich.table import Table
 
 from mobilerun.benchmark.common import (  # shared result/provenance plumbing
     TaskResult,
+    _infra_error_reason,
     _load_results,
     _load_run_history,
     _load_run_meta,
@@ -36,6 +37,7 @@ from mobilerun.benchmark.common import (  # shared result/provenance plumbing
     _parse_task_index_range,
     _print_summary,
     _setup_benchmark_logging,
+    _unrecognised_failure_reason,
     _write_results,
 )
 from mobilerun.harness.client import AgentClient, EnvClient, ServiceError
@@ -45,6 +47,7 @@ from mobilerun.harness.protocol import (
     Capabilities,
     EnvironmentRef,
     EpisodeEvidenceConfig,
+    EpisodeInfo,
     EpisodeLimits,
     EpisodeRequest,
     EpisodeResult,
@@ -144,6 +147,45 @@ def _overrides_for_session(
     ):
         return overrides.model_copy(update={"vision_only": True})
     return overrides
+
+
+def _abnormal_end_reason(final: EpisodeInfo) -> Optional[str]:
+    """Error for a terminal episode that is not a normal task failure.
+
+    Normal endings are a whitelist: ``SUCCEEDED`` with a result, a
+    ``FAILED`` that hit ``max_steps``, or a ``FAILED`` where the agent
+    declared the episode over (``declared_done``). Everything else — the
+    episode deadline, a cancellation, a missing result, an unknown reason on
+    a failure that never declared completion, or a future terminal state — is
+    abnormal and needs an ``error`` so ``--resume`` / ``--max-retry`` retry it
+    and ``env.finish`` does not turn it into an unselectable 0.
+    """
+    run = final.result
+    if final.error:
+        return str(final.error)
+
+    if final.state is EpisodeState.SUCCEEDED:
+        if run is not None:
+            return None
+        return "agent episode succeeded without a result"
+
+    if final.state is EpisodeState.FAILED:
+        if run is None:
+            return "agent episode failed without a result"
+        # Known transient/timeout reasons get a more specific message.
+        explicit = _infra_error_reason(run)
+        if explicit:
+            return explicit
+        # Default-deny: success / declared failure / max_steps are the only
+        # normal endings; every other failure is abnormal.
+        return _unrecognised_failure_reason(run, declared_done=run.declared_done)
+
+    if final.state is EpisodeState.CANCELLED:
+        return "agent episode was cancelled"
+
+    # A future agent service may add a terminal state; do not silently treat
+    # it as a normal failure.
+    return f"agent episode ended in unexpected state: {final.state!r}"
 
 
 def _failed_task_keys(path: Path) -> tuple[set[str], Dict[str, Any]]:
@@ -319,6 +361,9 @@ async def _run_one(
                     "response_tokens": run.usage.completion_tokens,
                     "total_tokens": run.usage.total_tokens,
                 }
+
+        if result.error is None:
+            result.error = _abnormal_end_reason(final)
 
         if result.error is None:
             finished = await env.finish(

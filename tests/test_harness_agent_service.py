@@ -63,7 +63,9 @@ class _FakeDriver:
         self.calls.append(("tap", x, y))
 
 
-def _fake_agent_class(*, success=True, answer="42", delay=0.0, manager_answer=True):
+def _fake_agent_class(
+    *, success=True, answer="42", delay=0.0, manager_answer=True, reason="done"
+):
     class _FakeAgent:
         def __init__(
             self, goal, config, llms, driver, timeout, runtype="benchmark", **kw
@@ -100,7 +102,7 @@ def _fake_agent_class(*, success=True, answer="42", delay=0.0, manager_answer=Tr
                 )
 
             return _Handler(
-                events(), SimpleNamespace(success=success, reason="done", steps=2)
+                events(), SimpleNamespace(success=success, reason=reason, steps=2)
             )
 
     return _FakeAgent

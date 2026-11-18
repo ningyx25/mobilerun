@@ -438,11 +438,16 @@ class MobileGymBackend(DriverBackend):
         }
         reason = json.dumps(payload, ensure_ascii=False, default=str)[:2000]
         if getattr(judge, "judge_error", None):
-            # A deterministic judge bug should not be retried as an infra
-            # error; keep the row scoreable and surface the reason.
-            reason = f"JudgeError: {judge.judge_error}; {reason}"[:2000]
+            # A judge failure means the score is meaningless. Report it as a
+            # scoring failure (502) instead of a scoreable 0: the runner then
+            # records an `error` and `--max-retry` / `--resume` retry the task.
             logger.warning(
                 "MobileGym judge error for %s: %s", task.id, judge.judge_error
+            )
+            raise ProtocolError(
+                502,
+                ErrorCode.BACKEND_UNAVAILABLE,
+                f"JudgeError: {judge.judge_error}",
             )
         return (1.0 if judge.passed else 0.0), reason
 

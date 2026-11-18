@@ -48,6 +48,7 @@
 #     --n-task-combinations N   AndroidWorld 每任务实例数
 #     --no-resume               不跳过已记录的任务
 #     --rerun-fail              重跑各模型上一轮失败的题（error 为空且 score==0）
+#                               超时/取消等带 error 的行请用 eval --resume 重跑
 #                               源文件自动取 <run-dir>/results/<模型>.json
 #                               结果写到 <模型>_rerun.json，原文件不动
 #                               默认带 --resume：中断后再跑一次即续跑未完成的题；

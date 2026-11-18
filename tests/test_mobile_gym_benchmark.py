@@ -654,3 +654,21 @@ def test_runbench_help_lists_mobilegym_options():
 
 if __name__ == "__main__":
     pytest.main([__file__])
+
+
+def test_unrecognised_failure_is_default_denied(monkeypatch, tmp_path):
+    """A failure that never declared completion is an error by default."""
+    tasks = [FakeTask("a.One")]
+    be = make_bench_env_namespace(tasks=tasks, split_ids={"a.One"})
+    agent_class = make_fake_agent_class(
+        success=False,
+        shared_success=None,
+        reason="watchdog aborted the episode",
+    )
+    patch_runner(monkeypatch, be, agent_class)
+    output = tmp_path / "results.json"
+
+    run(bench.run_mobilegym_benchmark(output=str(output), capture_evidence=False))
+    row = json.loads(output.read_text())["tasks"][0]
+    assert row["error"].startswith("agent episode failed without declaring completion:")
+    assert "watchdog aborted the episode" in row["error"]

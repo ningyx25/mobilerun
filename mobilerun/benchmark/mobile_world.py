@@ -49,6 +49,7 @@ from mobilerun.benchmark.common import (
     _SCORE_TIMEOUT,
     _finalize_episode_evidence,
     _infra_error_reason,
+    _unrecognised_failure_reason,
     _load_results,
     _load_run_history,
     _load_run_meta,
@@ -653,6 +654,10 @@ async def run_mobileworld_benchmark(
                 else:
                     declared_done = agent.shared_state.success is not None
                 result.finished = declared_done
+                if result.error is None:
+                    result.error = _unrecognised_failure_reason(
+                        run_result, declared_done=declared_done
+                    )
 
                 # Answer-style tasks grade purely from the submitted answer, so
                 # it must reach the server before /task/eval. Best-effort.

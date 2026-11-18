@@ -438,16 +438,20 @@ def test_evaluate_uses_finish_context(monkeypatch):
     assert set(payload) == {"success", "clean", "progress", "issues", "warnings"}
 
 
-def test_evaluate_judge_error_scores_zero_and_reports(monkeypatch):
+def test_evaluate_judge_error_raises_a_retryable_scoring_error(monkeypatch):
     backend, _, _ = make_backend(monkeypatch)
-    FakeEvaluator.judge = FakeJudge(passed=False, judge_error="boom")
+    monkeypatch.setattr(
+        FakeEvaluator, "judge", FakeJudge(passed=False, judge_error="boom")
+    )
     run(backend.connect())
     run(backend.prepare("Alpha"))
 
-    score, reason = run(backend.evaluate())
+    with pytest.raises(ProtocolError) as excinfo:
+        run(backend.evaluate())
 
-    assert score == 0.0
-    assert reason.startswith("JudgeError: boom;")
+    assert excinfo.value.status_code == 502
+    assert excinfo.value.code is ErrorCode.BACKEND_UNAVAILABLE
+    assert "JudgeError: boom" in excinfo.value.message
 
 
 def test_evaluate_without_active_task_is_409(monkeypatch):
@@ -537,3 +541,32 @@ def test_env_service_undeclared_finish_is_gated(monkeypatch):
         assert finished["score"] == 1.0
         assert finished["gated_score"] == 0.0
         assert finished["declared_done"] is False
+
+
+def test_env_service_judge_error_is_a_scoring_error(monkeypatch):
+    from fastapi.testclient import TestClient
+
+    backend, _, _ = make_backend(monkeypatch)
+    FakeEvaluator.judge = FakeJudge(passed=False, judge_error="boom")
+    with TestClient(create_env_app([backend])) as client:
+        session_id = client.post(
+            "/v1/sessions", json={"backend": "mg0", "task_id": "Alpha"}
+        ).json()["session_id"]
+
+        first = client.post(
+            f"/v1/sessions/{session_id}/finish",
+            json={"declared_done": True},
+        )
+        second = client.post(
+            f"/v1/sessions/{session_id}/finish",
+            json={"declared_done": True},
+        )
+
+        assert first.status_code == 502
+        assert "JudgeError: boom" in first.json()["message"]
+        # A retried request must replay the real cause, not a generic 409.
+        assert second.status_code == 502
+        assert second.json()["message"] == first.json()["message"]
+
+        deleted = client.delete(f"/v1/sessions/{session_id}")
+        assert deleted.json()["ok"] is True

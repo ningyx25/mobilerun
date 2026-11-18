@@ -48,9 +48,10 @@
 #     --difficulty LEVEL        只跑指定难度（可重复：easy / medium / hard）
 #     --no-resume               不跳过已记录的任务
 #     --resume                  跳过已记录的任务（默认）
-#     --rerun-fail              重跑各模型上一轮 score=0 的题
+#     --rerun-fail              重跑各模型上一轮 score=0 的题（error 为空）
 #                               源文件自动取 <run-dir>/results/<模型>.json
 #                               结果写到 <模型>_rerun.json，原文件不动
+#                               超时/取消等带 error 的行请用 eval --resume 重跑
 #     --rerun-fail-dir DIR      指定失败源所在的 results 目录（默认当前 run-dir）
 #     --no-evidence             不写证据包
 #     --no-debug                不打印 agent 实时事件

@@ -146,10 +146,10 @@ Details worth knowing:
   android-world/mobile-world in one service.
 - **No suite seeding.** `reinitialize` is a no-op; `--seed` /
   `--n-task-combinations` do not apply.
-- **Judge errors are scoreable.** A deterministic judge failure returns score
-  0 with `JudgeError:` in `eval_reason` instead of an infra error, so it is
-  not retried by `--max-retry`; device/state read failures do return a
-  retryable 503.
+- **Judge errors are errors.** A judge failure raises a scoring error
+  (`JudgeError: ...`, 502), so the row records `error` with no score and
+  `--resume` / `--max-retry` can retry it; use `--max-retry 0` for
+  deterministic judge bugs. Device/state read failures remain retryable 503s.
 - `result.server_url` records the environment-service URL, not the simulator
   URL (the latter is in the backend's `/v1/health.url`).
 
@@ -220,7 +220,10 @@ mobilerun eval --env http://localhost:9001 --agent http://localhost:9100 \
 tasks. **Failed** means a row whose `error` is null and whose `score` is exactly
 `0.0`; an unscored row (`score: null`, no error) counts as failed too. Rows
 carrying an `error` are excluded — those are `--resume`'s job — and a partial
-score (`0 < score < 1`) is treated as a pass and is not retried.
+score (`0 < score < 1`) is treated as a pass and is not retried. This includes
+the abnormal endings below: an agent episode that times out, is cancelled, dies
+on a provider/scoring error, or returns no result is an `error` row, so retry
+it with `--resume` / `--max-retry`, not `--rerun-fail`.
 
 The file is only a selection source: every other option keeps its meaning.
 `--tasks`, `--task-index-range`, `--difficulty` and `--backend` narrow the suite
@@ -241,6 +244,18 @@ timeout, a service 5xx, a connection failure, or an unexpected exception. A
 `--rerun-fail`'s job. `--rerun-fail` still selects only `error == null &&
 score == 0` rows from its source file, so `--max-retry` is what covers errors
 produced during the current run (including a rerun that errors again).
+
+A **normal task failure** stays `error == null`: the agent declared the
+episode over without success (`declared_done`), hit `max_steps`, or simply
+scored 0. The abnormal endings that carry an `error` are the agent's own
+episode deadline (`timed out after Ns` / `WorkflowTimeoutError`), a
+cancellation, an agent/service error, a scoring/judge failure, and a terminal
+state with no result. This is a default-deny whitelist: a `FAILED` episode
+that never declared completion and is not `max_steps` is an error even when
+its reason is unrecognised, and a future terminal state is an error too.
+Timeouts therefore consume `--max-retry` attempts and, once recorded, are
+picked up by `--resume`; they are not part of `--rerun-fail`'s
+`error == null && score == 0` subset.
 
 Each retry starts a fresh session/episode and gets the full `--task-timeout`, so
 the worst case is about `(max_retry + 1) × task_timeout` per task. Capacity

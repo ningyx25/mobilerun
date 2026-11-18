@@ -42,11 +42,12 @@ def test_android_world_catalogue_uses_each_task_complexity(monkeypatch):
     backend = backend_module.AndroidWorldBackend("aw0", "http://aw.test")
     tasks = asyncio.run(backend.list_tasks())
 
-    # AndroidWorld's budget is int(10 * complexity) per task, not a flat 50.
-    # A task whose complexity cannot be read falls back to the old placeholder.
+    # The reference runner uses tiered buckets, not int(10 * complexity):
+    # 0 -> 15, <=1 -> 30, <=2 -> 50, >2 -> 60. An unreadable complexity falls
+    # back to the flat 50 placeholder.
     assert [(t.id, t.complexity, t.max_steps) for t in tasks] == [
-        ("Easy", 1.2, 12),
-        ("Hard", 2.8, 28),
+        ("Easy", 1.2, 50),
+        ("Hard", 2.8, 60),
         ("Broken", None, 50),
     ]
 
