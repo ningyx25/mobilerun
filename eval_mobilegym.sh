@@ -89,6 +89,11 @@
 #     当前合成输入不可操作；结果与官方 vision-only 数字不可直接比较。
 #   * MobileGym 的任务大量需要输入中文；--policy jev-mobile 时脚本默认把
 #     input_charset 设为 unicode（可用 --input-charset ascii 关闭）。
+#   * jev-mobile 默认 grounding_mode="box"（全链路截图决策，不需要 a11y tree）：
+#     需要官方 TypeSafe（jev_base_url=https://api.typesafe.ai）和 TYPESAFE_API_KEY；
+#     跨网络时 export HTTPS_PROXY=http://127.0.0.1:7890 或在 --policy-config
+#     里设 "jev_proxy"。api.yuai.dev 不支持 Box，想要旧路径请显式设
+#     "grounding_mode": "a11y"（可配合 --ui-tree）。
 #   * --host 只用于环境/智能体服务；模型服务可用 --model-host / --model-base-url(s)
 #     指向远程 sglang 或第三方 OpenAI 兼容端点。默认 fast-agent 配置通过
 #     OPENAI_API_KEY 传 key；第三方端点如果没有 /models，加 --no-model-check。

@@ -139,8 +139,9 @@ Details worth knowing:
   `mobilerun eval` automatically sets `vision_only=true` for tree-less
   backends unless the caller overrides it. With
   `?ui_tree=dom` the driver synthesises a portal-shaped tree from the
-  rendered DOM (`mobilerun/tools/driver/mobile_gym_dom.py`), so tree-based
-  policies such as `jev-mobile` can consume it:
+  rendered DOM (`mobilerun/tools/driver/mobile_gym_dom.py`), for tree-based
+  policies and for `jev-mobile` with `grounding_mode="a11y"`
+  (`jev-mobile` now defaults to `grounding_mode="box"`, which needs no tree):
 
   ```bash
   mobilerun serve env \
@@ -161,11 +162,15 @@ Details worth knowing:
   `__SIM_INPUT__` dispatch does not enter child documents, so iframe
   content is observable yet not actionable; no benchmark task uses the
   Browser app. Official MobileGym results are vision-only, so tree-policy
-  numbers are not directly comparable. `jev-mobile` consumes the tree as-is
-  and, because MobileGym tasks type Chinese text, needs
+  numbers are not directly comparable. `jev-mobile` in `a11y` mode consumes
+  the tree as-is and, because MobileGym tasks type Chinese text, needs
   `"input_charset": "unicode"` in its policy config (the shipped
   `eval_mobilegym.sh` sets this automatically for `--policy jev-mobile`);
   without it the policy rejects CJK strings and falls back to `wait`.
+  In the default `box` mode the planner and the TypeSafe Box executor both
+  work from the screenshot only, so no tree is needed; that mode requires
+  the official TypeSafe endpoint (`TYPESAFE_API_KEY`) and a proxy when the
+  network needs one (see the agent-harness README).
   `fast-agent`'s shipped config is `vision_only: true`, so pass
   `vision_only: false` in its `--policy-config` to use the tree there.
 - **One backend = one Chromium.** Parallelism needs multiple backends, e.g.

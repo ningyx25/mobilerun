@@ -282,10 +282,13 @@ The simulator is vision-only by default, one backend is one Chromium page,
 and the `serve env` URL accepts `split` / `headless` / `startup_timeout` /
 `browser_path` / `ui_tree` options. Add `&ui_tree=dom` to expose a
 DOM-derived portal accessibility tree (`has_ui_tree=true`) for tree-based
-policies such as `jev-mobile`; it follows the AndroidWorld/MobileWorld field
-contract but is not a native uiautomator tree, and tree-based results are
-not directly comparable with MobileGym's official vision-only numbers. See
-the harness README for the coverage boundary.
+policies, including `jev-mobile` with `grounding_mode="a11y"`; it follows the
+AndroidWorld/MobileWorld field contract but is not a native uiautomator tree,
+and tree-based results are not directly comparable with MobileGym's official
+vision-only numbers. `jev-mobile` now defaults to `grounding_mode="box"`
+(image-only planner + TypeSafe Box executor), which needs no tree; see the
+harness README for the official-endpoint/proxy requirements and the coverage
+boundary.
 
 For a multi-model MobileGym run with the same lifecycle as `eval.sh`
 (`start` / `eval` / `status` / `stop` / `logs`), use the dedicated
