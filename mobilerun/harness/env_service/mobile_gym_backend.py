@@ -3,9 +3,13 @@
 MobileGym has no environment server. ``bench_env.MobileGymEnv`` drives the SPA
 at the simulator URL through Playwright in this process, so the backend owns
 one browser per backend id (one session at a time, enforced by the registry's
-per-backend lease). The simulator is vision-only: ``get_ui_tree`` returns an
-empty portal stub, so this backend removes that verb from its own driver
-instance and never advertises an accessibility tree.
+per-backend lease).
+
+The simulator is vision-only by default: ``get_ui_tree`` returns an empty
+portal stub and this backend removes that verb from its own driver instance.
+Append ``?ui_tree=dom`` to the backend URL to opt into a DOM-derived,
+portal-shaped accessibility tree instead (see
+:mod:`mobilerun.tools.driver.mobile_gym_dom`).
 """
 
 from __future__ import annotations
@@ -32,6 +36,7 @@ from mobilerun.tools.driver.mobile_gym import (
     MobileGymBrowserDriver,
     discover_tasks,
     load_bench_env,
+    max_steps_for_task,
     resolve_app_identifier,
     validate_mobile_gym_url,
     wait_for_sim,
@@ -41,7 +46,10 @@ logger = logging.getLogger("mobilerun")
 
 _DEFAULT_HEADLESS = True
 _DEFAULT_STARTUP_TIMEOUT_S = 120.0
-_QUERY_OPTIONS = frozenset({"split", "headless", "startup_timeout", "browser_path"})
+_QUERY_OPTIONS = frozenset(
+    {"split", "headless", "startup_timeout", "browser_path", "ui_tree"}
+)
+_UI_TREE_MODES = frozenset({"off", "dom"})
 _TRUE = {"1", "true", "yes", "on"}
 _FALSE = {"0", "false", "no", "off"}
 
@@ -53,6 +61,7 @@ class MobileGymOptions:
     headless: bool = _DEFAULT_HEADLESS
     startup_timeout: float = _DEFAULT_STARTUP_TIMEOUT_S
     browser_path: Optional[str] = None
+    ui_tree: str = "off"
 
 
 def _parse_query(query: str) -> Dict[str, str]:
@@ -127,7 +136,18 @@ def parse_mobile_gym_backend_url(raw: str) -> MobileGymOptions:
                 f"MobileGym option 'browser_path' does not exist: {browser_path}"
             )
 
-    return MobileGymOptions(url, split, headless, startup_timeout, browser_path)
+    ui_tree = "off"
+    if "ui_tree" in query:
+        ui_tree = query["ui_tree"].strip().lower()
+        if ui_tree not in _UI_TREE_MODES:
+            raise ValueError(
+                "MobileGym option 'ui_tree' must be 'off' or 'dom', "
+                f"got '{ui_tree}'"
+            )
+
+    return MobileGymOptions(
+        url, split, headless, startup_timeout, browser_path, ui_tree
+    )
 
 
 class MobileGymBackend(DriverBackend):
@@ -143,6 +163,7 @@ class MobileGymBackend(DriverBackend):
         self.split = options.split
         self.headless = options.headless
         self.startup_timeout = options.startup_timeout
+        self.ui_tree = options.ui_tree
 
         try:
             self._split_ids = be.resolve_split(self.split) if self.split else None
@@ -165,10 +186,14 @@ class MobileGymBackend(DriverBackend):
         )
         if options.browser_path:
             self._apply_browser_path(env, options.browser_path)
-        driver = MobileGymBrowserDriver(env=env)
-        # Vision-only: never fetch the empty portal stub. This keeps observe()
-        # and capabilities() consistent without touching the shared driver.
-        driver.supported = set(driver.supported) - {"get_ui_tree"}
+        driver = MobileGymBrowserDriver(
+            env=env, dom_tree=(options.ui_tree == "dom")
+        )
+        if options.ui_tree != "dom":
+            # Default mode: never fetch the empty portal stub. This keeps
+            # observe() and capabilities() consistent without touching the
+            # shared driver.
+            driver.supported = set(driver.supported) - {"get_ui_tree"}
         super().__init__(backend_id, driver)
 
         self._env = env
@@ -328,11 +353,12 @@ class MobileGymBackend(DriverBackend):
         self._active_task_obj = task
         self._init_obs = init_obs
         self._episode_started = started
+        # MobileGym's official budget: explicit ``task.max_steps`` wins,
+        # otherwise difficulty (L1..L4) plus +15 for grounded answer-sheet
+        # tasks. ``params["max_steps"]`` is an explicit caller override.
         max_steps = int(
             params.get("max_steps")
-            or getattr(task, "max_steps", None)
-            or meta[task_id].get("max_steps")
-            or MOBILE_GYM_DEFAULT_MAX_STEPS
+            or max_steps_for_task(task, be=self._be)
         )
         spec = TaskSpec(
             id=f"{task_id}#0",
@@ -479,5 +505,11 @@ class MobileGymBackend(DriverBackend):
     def capabilities(self) -> Capabilities:
         caps = super().capabilities()
         return caps.model_copy(
-            update={"has_ui_tree": False, "supports_stabilize": False}
+            update={
+                # Derived from the driver's verb set: False in the default
+                # mode because __init__ removed the verb; True when
+                # ui_tree=dom left it in.
+                "has_ui_tree": "get_ui_tree" in set(caps.verbs),
+                "supports_stabilize": False,
+            }
         )

@@ -278,9 +278,14 @@ mobilerun eval --env http://localhost:9001 --agent http://localhost:9100 \
   --backend mg0 --tasks '<task-id>' --output runs/mobilegym.json
 ```
 
-The simulator is vision-only, one backend is one Chromium page, and the
-`serve env` URL accepts `split` / `headless` / `startup_timeout` /
-`browser_path` options. See the harness README for details.
+The simulator is vision-only by default, one backend is one Chromium page,
+and the `serve env` URL accepts `split` / `headless` / `startup_timeout` /
+`browser_path` / `ui_tree` options. Add `&ui_tree=dom` to expose a
+DOM-derived portal accessibility tree (`has_ui_tree=true`) for tree-based
+policies such as `jev-mobile`; it follows the AndroidWorld/MobileWorld field
+contract but is not a native uiautomator tree, and tree-based results are
+not directly comparable with MobileGym's official vision-only numbers. See
+the harness README for the coverage boundary.
 
 For a multi-model MobileGym run with the same lifecycle as `eval.sh`
 (`start` / `eval` / `status` / `stop` / `logs`), use the dedicated

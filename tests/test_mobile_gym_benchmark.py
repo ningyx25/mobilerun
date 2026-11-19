@@ -672,3 +672,48 @@ def test_unrecognised_failure_is_default_denied(monkeypatch, tmp_path):
     row = json.loads(output.read_text())["tasks"][0]
     assert row["error"].startswith("agent episode failed without declaring completion:")
     assert "watchdog aborted the episode" in row["error"]
+
+
+def test_driver_opt_in_dom_tree_calls_builder(monkeypatch):
+    driver, env, _at = _make_driver(monkeypatch)
+    env.page = object()
+    env.dpr = 3.0
+    driver.dom_tree = True
+    captured = {}
+
+    async def fake_build(page, *, physical_size, dpr=None):
+        captured.update(page=page, physical_size=physical_size, dpr=dpr)
+        return {
+            "a11y_tree": {"children": [{"text": "OK"}]},
+            "device_context": {},
+            "phone_state": {},
+        }
+
+    monkeypatch.setattr(
+        "mobilerun.tools.driver.mobile_gym.build_dom_tree", fake_build
+    )
+
+    result = run(driver.get_ui_tree())
+
+    assert result["a11y_tree"]["children"][0]["text"] == "OK"
+    assert captured["physical_size"] == (1080, 2400)
+    assert captured["dpr"] == 3.0
+
+
+def test_driver_opt_in_failure_returns_the_empty_stub(monkeypatch):
+    driver, env, _at = _make_driver(monkeypatch)
+    env.page = object()
+    driver.dom_tree = True
+
+    async def boom(*_args, **_kwargs):
+        raise RuntimeError("no dom today")
+
+    monkeypatch.setattr("mobilerun.tools.driver.mobile_gym.build_dom_tree", boom)
+
+    result = run(driver.get_ui_tree())
+
+    assert result["a11y_tree"]["children"] == []
+    assert result["device_context"]["screen_bounds"] == {
+        "width": 1080,
+        "height": 2400,
+    }

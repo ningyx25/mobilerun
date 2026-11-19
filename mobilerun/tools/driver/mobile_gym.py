@@ -28,6 +28,8 @@ from urllib.parse import urlparse
 
 from mobilerun_core_local.driver.base import DeviceDriver, unsupported
 
+from mobilerun.tools.driver.mobile_gym_dom import build_dom_tree
+
 logger = logging.getLogger("mobilerun")
 
 # ``device.control_backend`` value selecting this driver; the simulator URL
@@ -37,6 +39,19 @@ MOBILE_GYM_DEFAULT_URL = "https://localhost:4180"
 
 # Task catalogue defaults shared by the runbench runner and the env backend.
 MOBILE_GYM_DEFAULT_MAX_STEPS = 30
+#: MobileGym's official step budgets (``bench_env.config.DIFFICULTY_MAX_STEPS``).
+#: A task's explicit ``max_steps`` wins; otherwise the budget follows difficulty.
+MOBILE_GYM_DIFFICULTY_MAX_STEPS = {
+    "L1": 15,
+    "L2": 30,
+    "L3": 45,
+    "L4": 60,
+}
+MOBILE_GYM_TASK_MAX_STEPS_ALLOWED = frozenset(
+    MOBILE_GYM_DIFFICULTY_MAX_STEPS.values()
+)
+#: Grounded answer-sheet tasks get extra steps to open the sheet and submit.
+MOBILE_GYM_ANSWER_SHEET_BONUS = 15
 MOBILE_GYM_DIFFICULTY_MAP = {
     "L1": "easy",
     "L2": "medium",
@@ -56,6 +71,7 @@ def load_bench_env() -> SimpleNamespace:
     """Import the optional ``bench_env`` API with an actionable error."""
     try:
         import bench_env  # noqa: F401
+        from bench_env.config import DIFFICULTY_MAX_STEPS, TASK_MAX_STEPS_ALLOWED
         from bench_env.env.mobile_gym import MobileGymEnv
         from bench_env.runner.base import Controller, Evaluator, ExecutionResult
         from bench_env.splits import base_task_id, resolve_split
@@ -70,7 +86,45 @@ def load_bench_env() -> SimpleNamespace:
         base_task_id=base_task_id,
         resolve_split=resolve_split,
         TaskRegistry=TaskRegistry,
+        DIFFICULTY_MAX_STEPS=DIFFICULTY_MAX_STEPS,
+        TASK_MAX_STEPS_ALLOWED=TASK_MAX_STEPS_ALLOWED,
     )
+
+
+def max_steps_for_task(task: Any, *, be: Any = None) -> int:
+    """The official MobileGym step budget for one task.
+
+    Mirrors ``bench_env.config.RunnerConfig.get_max_steps``: an explicit
+    ``task.max_steps`` wins; otherwise the budget follows ``task.difficulty``
+    (L1=15, L2=30, L3=45, L4=60) and grounded answer-sheet tasks get +15.
+    """
+    difficulty_map = getattr(
+        be, "DIFFICULTY_MAX_STEPS", MOBILE_GYM_DIFFICULTY_MAX_STEPS
+    )
+    allowed = getattr(
+        be, "TASK_MAX_STEPS_ALLOWED", MOBILE_GYM_TASK_MAX_STEPS_ALLOWED
+    )
+    explicit = getattr(task, "max_steps", None)
+    if explicit is not None:
+        if (
+            not isinstance(explicit, int)
+            or isinstance(explicit, bool)
+            or explicit not in allowed
+        ):
+            task_id = getattr(task, "id", None) or task.__class__.__name__
+            raise ValueError(
+                f"{task_id}.max_steps must be one of "
+                f"{sorted(allowed)}; got {explicit!r}"
+            )
+        steps = int(explicit)
+    else:
+        difficulty = getattr(task, "difficulty", None)
+        steps = int(difficulty_map.get(difficulty, MOBILE_GYM_DEFAULT_MAX_STEPS))
+    # The official ``get_max_steps`` applies the grounded answer-sheet bonus
+    # on top of an explicit task budget as well.
+    if getattr(task, "answer_fields", None):
+        steps += MOBILE_GYM_ANSWER_SHEET_BONUS
+    return steps
 
 
 async def wait_for_sim(page: Any, timeout: float = 60.0) -> None:
@@ -117,9 +171,7 @@ def discover_tasks(
             "difficulty": MOBILE_GYM_DIFFICULTY_MAP.get(
                 str(getattr(task, "difficulty", "")), ""
             ),
-            "max_steps": int(
-                getattr(task, "max_steps", None) or MOBILE_GYM_DEFAULT_MAX_STEPS
-            ),
+            "max_steps": max_steps_for_task(task, be=be),
             "apps": ",".join(getattr(task, "apps", []) or []),
         }
         for task in discovered
@@ -168,9 +220,10 @@ def validate_mobile_gym_url(url: str) -> str:
 class MobileGymBrowserDriver(DeviceDriver):
     """DeviceDriver facade over an in-process ``MobileGymEnv``.
 
-    The simulator is a React DOM app with no accessibility tree, so
-    ``get_ui_tree`` returns an empty portal-shaped stub and the benchmark must
-    run with ``vision_only: true``.
+    The simulator is a React DOM app. By default it is vision-only and
+    ``get_ui_tree`` returns an empty portal-shaped stub; with
+    ``dom_tree=True`` it synthesises a portal-shaped tree from the rendered
+    DOM (see :mod:`mobilerun.tools.driver.mobile_gym_dom`).
     """
 
     platform = "Android"
@@ -190,8 +243,9 @@ class MobileGymBrowserDriver(DeviceDriver):
     }
     supported_buttons = set(_NAV_BUTTONS)
 
-    def __init__(self, env: Any) -> None:
+    def __init__(self, env: Any, dom_tree: bool = False) -> None:
         self.env = env
+        self.dom_tree = bool(dom_tree)
         self._answer: str = ""
         self._connected = False
 
@@ -344,8 +398,8 @@ class MobileGymBrowserDriver(DeviceDriver):
         await self.ensure_connected()
         return await self.env.page.screenshot(type="jpeg", quality=80)
 
-    async def get_ui_tree(self) -> Dict[str, Any]:
-        """Empty portal-shaped stub: the simulator is DOM, not uiautomator."""
+    def _portal_stub(self) -> Dict[str, Any]:
+        """The vision-only state: no accessibility tree."""
         width, height = 1080, 2400
         get_size = getattr(self.env, "get_device_size", None)
         if get_size is not None:
@@ -358,6 +412,31 @@ class MobileGymBrowserDriver(DeviceDriver):
             "device_context": {"screen_bounds": {"width": width, "height": height}},
             "phone_state": {},
         }
+
+    async def get_ui_tree(self) -> Dict[str, Any]:
+        """Portal tree from the DOM when opted in, else the empty stub."""
+        if not self.dom_tree:
+            return self._portal_stub()
+        await self.ensure_connected()
+        width, height = 1080, 2400
+        get_size = getattr(self.env, "get_device_size", None)
+        if get_size is not None:
+            try:
+                width, height = get_size()
+            except Exception as exc:  # noqa: BLE001 - best effort
+                logger.debug("get_device_size failed: %s", exc)
+        try:
+            return await build_dom_tree(
+                self.env.page,
+                physical_size=(int(width), int(height)),
+                dpr=float(getattr(self.env, "dpr", 3.0)),
+            )
+        except Exception as exc:  # noqa: BLE001 - observation must not fail
+            logger.warning(
+                "MobileGym DOM tree extraction failed; returning an empty tree: %s",
+                exc,
+            )
+            return self._portal_stub()
 
     async def get_date(self) -> str:
         """The simulator's virtual clock as ``YYYY-MM-DDTHH:MM:SS``.

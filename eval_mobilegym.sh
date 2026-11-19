@@ -20,6 +20,7 @@
 #
 # 用法：
 #     ./eval_mobilegym.sh                 # 一键：起环境/智能体服务 → 跑测评
+#     ./eval_mobilegym.sh run             # 显式 run：等价于无参数（起服务 → 跑测评）
 #     ./eval_mobilegym.sh start           # 只起服务
 #     ./eval_mobilegym.sh eval            # 只跑测评（复用 start 起的服务，可反复 resume）
 #     ./eval_mobilegym.sh status          # 查看进程 / 端口 / 健康状态
@@ -31,6 +32,9 @@
 #     --sim-url URL             模拟器地址（默认 https://localhost:4180）
 #     --sim-urls a,b,c          每个 backend 用不同模拟器（不足时复用最后一个）
 #     --split NAME              MobileGym split（默认 test；支持 test+payment / 文件路径）
+#     --ui-tree                 启用 DOM 派生的 accessibility tree（默认关闭；
+#                               仅对 start 生效；后端 URL 追加 ui_tree=dom）
+#     --no-ui-tree              关闭 accessibility tree（默认）
 #     --headless / --no-headless
 #     --browser-path PATH       Playwright 浏览器可执行文件（可选；用于系统不兼容时）
 #     --startup-timeout SEC     单个模拟器启动等待（默认 120）
@@ -40,6 +44,8 @@
 #     --models a,b,c,d          各进程模型名（默认从 /v1/models 自动读取）
 #     --policy NAME             智能体策略（默认 fast-agent；vision-only 配置）
 #     --policy-config PATH      策略配置底稿，按进程覆盖 model / base_url
+#     --input-charset NAME      jev-mobile 的输入字符集：ascii|unicode
+#                               （默认：jev-mobile 为 unicode，其它策略不改）
 #     --output PATH             结果文件底名（自动加 _<模型名> 后缀）
 #     --task-timeout SEC        单任务超时（默认 600）
 #     --max-retry N             单任务出现 error 时的同进程重试次数（默认 10，0 关闭）
@@ -75,8 +81,14 @@
 #     所以 --health-timeout 默认 600；K 较大时请相应调大。
 #   * 模拟器 URL 必须可访问（脚本用 curl -k 预检）；同一个 URL 可以被多个独立
 #     浏览器 page 共享，每个 page 的状态互不干扰。
-#   * 模拟器是 vision-only：没有 a11y tree，runner 会给 has_ui_tree=false 的后端
+#   * 默认 vision-only：没有 a11y tree，runner 会给 has_ui_tree=false 的后端
 #     自动加 vision_only=true；agent policy 必须支持截图决策。
+#     --ui-tree 会在后端 URL 追加 ui_tree=dom，输出 DOM 合成的 portal a11y tree
+#     （has_ui_tree=true），可配合 --policy jev-mobile 使用。该树与 AndroidWorld/
+#     MobileWorld 的字段契约一致，但不等于原生 uiautomator 树；iframe 内容可观察、
+#     当前合成输入不可操作；结果与官方 vision-only 数字不可直接比较。
+#   * MobileGym 的任务大量需要输入中文；--policy jev-mobile 时脚本默认把
+#     input_charset 设为 unicode（可用 --input-charset ascii 关闭）。
 #   * --host 只用于环境/智能体服务；模型服务可用 --model-host / --model-base-url(s)
 #     指向远程 sglang 或第三方 OpenAI 兼容端点。默认 fast-agent 配置通过
 #     OPENAI_API_KEY 传 key；第三方端点如果没有 /models，加 --no-model-check。
@@ -102,11 +114,13 @@ MODEL_BASE_URLS=""
 SIM_URL="https://localhost:4180"
 SIM_URLS=""
 SPLIT="test"
+UI_TREE=0
 HEADLESS=1
 BROWSER_PATH=""
 STARTUP_TIMEOUT=120
 POLICY="fast-agent"
 POLICY_CONFIG="$ROOT/agent-harness/agent_harness/agents/fast_agent/configs/config.json"
+INPUT_CHARSET=""
 MOBILEGYM_DIR="${MOBILEGYM_DIR:-}"
 MODELS=""
 OUTPUT=""
@@ -335,12 +349,15 @@ while [ $# -gt 0 ]; do
     --sim-url)             SIM_URL="${2:?缺数值}"; shift 2 ;;
     --sim-urls)            SIM_URLS="${2:?缺数值}"; shift 2 ;;
     --split)               SPLIT="${2:?缺数值}"; shift 2 ;;
+    --ui-tree)             UI_TREE=1; shift ;;
+    --no-ui-tree)          UI_TREE=0; shift ;;
     --browser-path)        BROWSER_PATH="${2:?缺路径}"; shift 2 ;;
     --startup-timeout)     STARTUP_TIMEOUT="${2:?缺数值}"; shift 2 ;;
     --headless)            HEADLESS=1; shift ;;
     --no-headless)         HEADLESS=0; shift ;;
     --policy)              POLICY="${2:?缺数值}"; shift 2 ;;
     --policy-config)       POLICY_CONFIG="${2:?缺路径}"; shift 2 ;;
+    --input-charset)       INPUT_CHARSET="${2:?缺数值}"; shift 2 ;;
     --mobilegym-dir)       MOBILEGYM_DIR="${2:?缺路径}"; shift 2 ;;
     --models)              MODELS="${2:?缺数值}"; shift 2 ;;
     --output)              OUTPUT="${2:?缺数值}"; shift 2 ;;
@@ -378,6 +395,10 @@ case "$MAX_RETRY" in
 esac
 [ "$PROCS" -ge 1 ] || die "--processes 至少为 1"
 [ "$BACKENDS_PER_ENV" -ge 1 ] || die "--backends-per-env 至少为 1"
+case "$INPUT_CHARSET" in
+  ""|ascii|unicode) ;;
+  *) die "--input-charset 必须是 ascii 或 unicode（当前: $INPUT_CHARSET）" ;;
+esac
 [ -n "$SPLIT" ] || die "--split 不能为空"
 [ -n "$PARALLEL" ] && { case "$PARALLEL" in ''|*[!0-9]*) die "--parallel 必须是正整数";; esac; }
 [ "$PARALLEL" -ge 1 ] 2>/dev/null || [ -z "$PARALLEL" ] || die "--parallel 至少为 1"
@@ -584,6 +605,7 @@ build_backend_specs() {
   for ((j = 1; j <= BACKENDS_PER_ENV; j++)); do
     url="$(sim_url_for "$j")"
     q="split=$(uri "$SPLIT")&headless=$(headless_bool)&startup_timeout=$STARTUP_TIMEOUT"
+    [ "$UI_TREE" -eq 1 ] && q+="&ui_tree=dom"
     [ -n "$BROWSER_PATH" ] && q+="&browser_path=$(uri "$BROWSER_PATH")"
     specs+="${specs:+,}mg$((j - 1))=mobile-gym@${url}?${q}"
   done
@@ -611,14 +633,30 @@ start_env_services() {
 }
 
 write_policy_config() {
-  local i="$1" out="$2" model="$3" base
+  local i="$1" out="$2" model="$3" base charset
   base="$(model_base_url_for "$i")"
+  charset="$INPUT_CHARSET"
+  if [ -z "$charset" ] && [ "$POLICY" = "jev-mobile" ]; then
+    charset="unicode"
+  fi
   if [ -f "$POLICY_CONFIG" ]; then
-    jq --arg m "$model" --arg b "$base" '.model = $m | .base_url = $b' "$POLICY_CONFIG" > "$out" \
-      || die "无法生成策略配置 $out（底稿: $POLICY_CONFIG）"
+    if [ -n "$charset" ]; then
+      jq --arg m "$model" --arg b "$base" --arg cs "$charset" \
+        '.model = $m | .base_url = $b | .input_charset = $cs' "$POLICY_CONFIG" > "$out" \
+        || die "无法生成策略配置 $out（底稿: $POLICY_CONFIG）"
+    else
+      jq --arg m "$model" --arg b "$base" '.model = $m | .base_url = $b' "$POLICY_CONFIG" > "$out" \
+        || die "无法生成策略配置 $out（底稿: $POLICY_CONFIG）"
+    fi
   else
-    jq -n --arg m "$model" --arg b "$base" '{model: $m, base_url: $b}' > "$out" \
-      || die "无法生成策略配置 $out"
+    if [ -n "$charset" ]; then
+      jq -n --arg m "$model" --arg b "$base" --arg cs "$charset" \
+        '{model: $m, base_url: $b, input_charset: $cs}' > "$out" \
+        || die "无法生成策略配置 $out"
+    else
+      jq -n --arg m "$model" --arg b "$base" '{model: $m, base_url: $b}' > "$out" \
+        || die "无法生成策略配置 $out"
+    fi
   fi
 }
 

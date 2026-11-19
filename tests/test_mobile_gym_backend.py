@@ -9,15 +9,19 @@ import io
 import json
 from dataclasses import dataclass, field
 from types import SimpleNamespace
+from typing import Any, Dict
 
 import pytest
 from PIL import Image
 
 from mobilerun.harness.env_service import mobile_gym_backend as backend_module
-from mobilerun.harness.env_service.backend import create_backend
 from mobilerun.harness.env_service.app import create_env_app
+from mobilerun.harness.env_service.backend import create_backend
 from mobilerun.harness.protocol import Action, ErrorCode, ProtocolError
-from mobilerun.tools.driver.mobile_gym import MobileGymBrowserDriver
+from mobilerun.tools.driver.mobile_gym import (
+    MobileGymBrowserDriver,
+    max_steps_for_task,
+)
 
 
 def run(coro):
@@ -209,6 +213,8 @@ def make_bench_env(tasks, *, split_ids=None):
             split_ids if split_ids is not None else {task.id for task in tasks}
         ),
         TaskRegistry=lambda: registry,
+        DIFFICULTY_MAX_STEPS={"L1": 15, "L2": 30, "L3": 45, "L4": 60},
+        TASK_MAX_STEPS_ALLOWED=frozenset({15, 30, 45, 60}),
     )
     return namespace, registry
 
@@ -252,6 +258,32 @@ def test_parse_backend_url_defaults_and_options():
     assert options.split == "train"
     assert options.headless is False
     assert options.startup_timeout == 30.0
+
+
+def test_parse_backend_url_ui_tree_mode():
+    defaults = backend_module.parse_mobile_gym_backend_url("https://localhost:4180")
+    assert defaults.ui_tree == "off"
+
+    enabled = backend_module.parse_mobile_gym_backend_url(
+        "https://localhost:4180?ui_tree=dom"
+    )
+    assert enabled.ui_tree == "dom"
+
+    upper = backend_module.parse_mobile_gym_backend_url(
+        "https://localhost:4180?ui_tree=DOM"
+    )
+    assert upper.ui_tree == "dom"
+
+    disabled = backend_module.parse_mobile_gym_backend_url(
+        "https://localhost:4180?ui_tree=off"
+    )
+    assert disabled.ui_tree == "off"
+
+    for bad in ("full", "1", ""):
+        with pytest.raises(ValueError, match="ui_tree"):
+            backend_module.parse_mobile_gym_backend_url(
+                f"https://localhost:4180?ui_tree={bad}"
+            )
 
 
 def test_parse_backend_url_preserves_plus_in_split():
@@ -340,6 +372,63 @@ def test_list_tasks_applies_split_and_reports_metadata(monkeypatch):
     assert registry.discover_calls == 1
 
 
+def test_step_budgets_match_mobilegym_official_design(monkeypatch):
+    tasks = [
+        FakeTask("L1", difficulty="L1", max_steps=None),
+        FakeTask("L2", difficulty="L2", max_steps=None),
+        FakeTask("L3", difficulty="L3", max_steps=None),
+        FakeTask("L4", difficulty="L4", max_steps=None),
+        FakeTask(
+            "L3Sheet", difficulty="L3", max_steps=None, answer_fields={"a": {}}
+        ),
+        FakeTask(
+            "L4Sheet", difficulty="L4", max_steps=None, answer_fields={"a": {}}
+        ),
+        FakeTask(
+            "ExplicitSheet",
+            difficulty="L3",
+            max_steps=45,
+            answer_fields={"a": {}},
+        ),
+        FakeTask("Override", difficulty="L4", max_steps=30),
+    ]
+    backend, _, _ = make_backend(monkeypatch, tasks=tasks)
+
+    specs = {spec.id: spec.max_steps for spec in run(backend.list_tasks())}
+
+    assert specs == {
+        "L1": 15,
+        "L2": 30,
+        "L3": 45,
+        "L4": 60,
+        "L3Sheet": 60,  # 45 + 15 for the grounded answer sheet
+        "L4Sheet": 75,  # 60 + 15
+        "ExplicitSheet": 60,  # explicit 45 still gets the +15 bonus
+        "Override": 30,  # explicit task.max_steps wins
+    }
+
+
+def test_prepare_uses_the_difficulty_budget(monkeypatch):
+    tasks = [
+        FakeTask(
+            "HardSheet", difficulty="L4", max_steps=None, answer_fields={"a": {}}
+        )
+    ]
+    backend, _, _ = make_backend(monkeypatch, tasks=tasks)
+    run(backend.connect())
+
+    spec = run(backend.prepare("HardSheet"))
+
+    assert spec.max_steps == 75
+
+
+def test_invalid_explicit_max_steps_is_rejected():
+    with pytest.raises(ValueError, match="max_steps"):
+        max_steps_for_task(
+            FakeTask("Bad", difficulty="L2", max_steps=20)
+        )
+
+
 def test_prepare_uses_fresh_task_instances_and_reads_instruction_after_setup(
     monkeypatch,
 ):
@@ -388,6 +477,116 @@ def test_observe_returns_jpeg_without_ui_tree(monkeypatch):
     assert observation.screenshot_bytes()[:2] == b"\xff\xd8"
     assert observation.screen.native_width == 1080
     assert observation.screen.native_height == 2400
+
+
+def _fake_dom_tree() -> Dict[str, Any]:
+    return {
+        "a11y_tree": {
+            "className": "",
+            "boundsInScreen": {
+                "left": 0,
+                "top": 0,
+                "right": 1080,
+                "bottom": 2400,
+            },
+            "children": [
+                {
+                    "className": "android.widget.Button",
+                    "text": "OK",
+                    "boundsInScreen": {
+                        "left": 10,
+                        "top": 20,
+                        "right": 110,
+                        "bottom": 70,
+                    },
+                    "isClickable": True,
+                    "enabled": True,
+                    "isEnabled": True,
+                }
+            ],
+        },
+        "device_context": {"screen_bounds": {"width": 1080, "height": 2400}},
+        "phone_state": {"currentApp": "wechat", "packageName": "wechat"},
+    }
+
+
+def test_capabilities_opt_in_ui_tree(monkeypatch):
+    backend, _, _ = make_backend(
+        monkeypatch, url="https://localhost:4180?split=test&ui_tree=dom"
+    )
+    capabilities = backend.capabilities()
+    assert capabilities.has_ui_tree is True
+    assert "get_ui_tree" in capabilities.verbs
+    assert capabilities.supports_stabilize is False
+
+
+def test_capabilities_default_remains_vision_only(monkeypatch):
+    backend, _, _ = make_backend(monkeypatch)
+    assert backend.driver.dom_tree is False
+    capabilities = backend.capabilities()
+    assert capabilities.has_ui_tree is False
+    assert "get_ui_tree" not in capabilities.verbs
+
+
+def test_observe_returns_dom_tree_when_enabled(monkeypatch):
+    async def fake_build(*_args, **_kwargs):
+        return _fake_dom_tree()
+
+    monkeypatch.setattr(
+        "mobilerun.tools.driver.mobile_gym.build_dom_tree", fake_build
+    )
+    backend, _, _ = make_backend(
+        monkeypatch, url="https://localhost:4180?split=test&ui_tree=dom"
+    )
+    run(backend.connect())
+
+    observation = run(backend.observe(seq=1))
+
+    assert observation.ui_tree == _fake_dom_tree()["a11y_tree"]
+    assert observation.foreground == "wechat"
+    assert observation.screen.native_width == 1080
+    assert observation.screen.native_height == 2400
+
+
+def test_observe_tree_failure_returns_empty_stub(monkeypatch):
+    async def boom(*_args, **_kwargs):
+        raise RuntimeError("no dom today")
+
+    monkeypatch.setattr("mobilerun.tools.driver.mobile_gym.build_dom_tree", boom)
+    backend, _, _ = make_backend(
+        monkeypatch, url="https://localhost:4180?split=test&ui_tree=dom"
+    )
+    run(backend.connect())
+
+    observation = run(backend.observe(seq=1))
+
+    assert observation.ui_tree["children"] == []
+    assert observation.screenshot_bytes()[:2] == b"\xff\xd8"
+
+
+def test_env_service_health_reports_ui_tree_opt_in(monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from mobilerun.harness.env_service.app import create_env_app
+
+    async def fake_build(*_args, **_kwargs):
+        return _fake_dom_tree()
+
+    monkeypatch.setattr(
+        "mobilerun.tools.driver.mobile_gym.build_dom_tree", fake_build
+    )
+    backend, _, _ = make_backend(
+        monkeypatch, url="https://localhost:4180?split=test&ui_tree=dom"
+    )
+
+    with TestClient(create_env_app([backend])) as client:
+        health = client.get("/v1/health").json()
+        assert health["backends"][0]["capabilities"]["has_ui_tree"] is True
+
+        created = client.post(
+            "/v1/sessions", json={"backend": "mg0", "task_id": "Alpha"}
+        ).json()
+        assert created["observation"]["ui_tree"]["children"]
 
 
 def test_observe_failure_maps_to_503_and_marks_disconnected(monkeypatch):

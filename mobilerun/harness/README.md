@@ -130,13 +130,44 @@ Backend URL options (query string, checked at startup):
 | `headless` | `true` | launch Chromium headless |
 | `startup_timeout` | `120` | seconds to wait for the simulator to become ready |
 | `browser_path` | — | optional executable path for Playwright (escape hatch when the installed Playwright cannot fetch its bundled Chromium) |
+| `ui_tree` | `off` | `off` (vision-only) or `dom` (DOM-derived portal a11y tree) |
 
 Details worth knowing:
 
-- **Vision-only.** The simulator has no accessibility tree; the backend
-  advertises `has_ui_tree=false` and omits `get_ui_tree` from its verbs.
+- **Vision-only by default; opt-in DOM tree.** Without `ui_tree=dom` the
+  backend advertises `has_ui_tree=false` and omits `get_ui_tree`, and
   `mobilerun eval` automatically sets `vision_only=true` for tree-less
-  backends unless the caller explicitly overrides it.
+  backends unless the caller overrides it. With
+  `?ui_tree=dom` the driver synthesises a portal-shaped tree from the
+  rendered DOM (`mobilerun/tools/driver/mobile_gym_dom.py`), so tree-based
+  policies such as `jev-mobile` can consume it:
+
+  ```bash
+  mobilerun serve env \
+    --backends 'mg0=mobile-gym@https://localhost:4180?split=test&ui_tree=dom'
+  ```
+
+  The tree carries the same field contract as AndroidWorld/MobileWorld
+  (`boundsInScreen` in physical screenshot pixels, `text`,
+  `contentDescription`, `hintText`, `resourceId`, `packageName`,
+  `isClickable`, `isLongClickable`, `isEditable`, `isScrollable`,
+  `isFocused`, `isVisibleToUser`, `isCheckable`/`isChecked`,
+  `isSelected`, `isEnabled`, plus `enabled` for `jev-mobile`), with
+  `phone_state.currentApp` taken from `__OS__`. It is **not** a native
+  uiautomator/CDP accessibility tree: un-tagged `div onClick` controls,
+  icon-only buttons without a label, canvas/map content and shadow DOM are
+  not represented. Attached iframes are traversed recursively through
+  Playwright (cross-origin included), but the simulator's synthetic
+  `__SIM_INPUT__` dispatch does not enter child documents, so iframe
+  content is observable yet not actionable; no benchmark task uses the
+  Browser app. Official MobileGym results are vision-only, so tree-policy
+  numbers are not directly comparable. `jev-mobile` consumes the tree as-is
+  and, because MobileGym tasks type Chinese text, needs
+  `"input_charset": "unicode"` in its policy config (the shipped
+  `eval_mobilegym.sh` sets this automatically for `--policy jev-mobile`);
+  without it the policy rejects CJK strings and falls back to `wait`.
+  `fast-agent`'s shipped config is `vision_only: true`, so pass
+  `vision_only: false` in its `--policy-config` to use the tree there.
 - **One backend = one Chromium.** Parallelism needs multiple backends, e.g.
   `mg0=...,mg1=...` (each opens its own page against the same simulator URL).
   Budget for memory; Chromium also consumes inotify instances.
@@ -146,6 +177,10 @@ Details worth knowing:
   android-world/mobile-world in one service.
 - **No suite seeding.** `reinitialize` is a no-op; `--seed` /
   `--n-task-combinations` do not apply.
+- **Step budgets follow MobileGym's official design.** A task's explicit
+  `max_steps` wins; otherwise the budget is L1=15, L2=30, L3=45, L4=60, plus
+  **+15** for grounded answer-sheet tasks (the step budget is per episode and
+  is also what `TaskSpec.max_steps` reports).
 - **Judge errors are errors.** A judge failure raises a scoring error
   (`JudgeError: ...`, 502), so the row records `error` with no score and
   `--resume` / `--max-retry` can retry it; use `--max-retry 0` for
