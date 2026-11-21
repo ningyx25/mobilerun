@@ -529,6 +529,10 @@ class TokenUsage(BaseModel):
     prompt_tokens: int = 0
     completion_tokens: int = 0
     total_tokens: int = 0
+    #: Logical model calls behind this usage (one per planner response and one
+    #: per executor decision; transport retries are not counted). Additive:
+    #: an older peer ignores it, a newer client defaults it to 0.
+    requests: int = 0
 
 
 class EpisodeResult(BaseModel):

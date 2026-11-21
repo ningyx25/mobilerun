@@ -24,6 +24,7 @@ from mobilerun.harness.protocol import (
     EpisodeState,
     FinishResponse,
     TaskSpec,
+    TokenUsage,
 )
 from mobilerun.harness.runner import _select_tasks
 from mobilerun.harness.testing import ScriptedBackend
@@ -526,6 +527,100 @@ def test_episode_manifest_is_written_after_scoring(tmp_path):
     assert manifest["timeline_path"] == "timeline.json"
     assert manifest["ui_tree_paths"] == ["ui_tree_before.json"]
     assert manifest["run"] == run_meta
+
+
+def test_an_empty_timeline_keeps_the_episode_usage(tmp_path):
+    from mobilerun.harness.runner import _write_episode_manifest
+
+    bundle = tmp_path / "Task_0"
+    (bundle / "trajectory").mkdir(parents=True)
+    (bundle / "timeline.json").write_text(
+        json.dumps(
+            {
+                "usage_totals": {
+                    "request_tokens": 0,
+                    "response_tokens": 0,
+                    "total_tokens": 0,
+                    "requests": 0,
+                }
+            }
+        )
+    )
+
+    result = TaskResult(task_type="Task", task_idx=0)
+    result.evidence_dir = str(bundle)
+    result.usage_totals = {
+        "request_tokens": 10,
+        "response_tokens": 5,
+        "total_tokens": 15,
+        "requests": 3,
+    }
+
+    _write_episode_manifest(result, {"run_id": "r1"})
+
+    manifest = json.loads((bundle / "episode.json").read_text())
+    # jev-mobile never emits per-call usage events, so its timeline is all
+    # zeros; the episode result must not be replaced by them.
+    assert manifest["usage_totals"] == {
+        "request_tokens": 10,
+        "response_tokens": 5,
+        "total_tokens": 15,
+        "requests": 3,
+    }
+    assert result.usage_totals["requests"] == 3
+
+
+def test_summary_sums_token_and_request_counts():
+    from mobilerun.benchmark.common import _build_summary
+
+    rows = {
+        "A#0": TaskResult(
+            task_type="A",
+            task_idx=0,
+            score=1.0,
+            usage_totals={"total_tokens": 10, "requests": 2},
+        ),
+        "B#0": TaskResult(
+            task_type="B",
+            task_idx=0,
+            score=0.0,
+            usage_totals={"total_tokens": 20, "requests": 3},
+        ),
+    }
+
+    summary = _build_summary(rows)
+
+    assert summary["total_tokens"] == 30
+    assert summary["total_requests"] == 5
+
+
+def test_a_smaller_timeline_cannot_lower_the_request_count(tmp_path):
+    from mobilerun.harness.runner import _write_episode_manifest
+
+    bundle = tmp_path / "Task_0"
+    (bundle / "trajectory").mkdir(parents=True)
+    (bundle / "timeline.json").write_text(
+        json.dumps(
+            {
+                "usage_totals": {
+                    "request_tokens": 1,
+                    "response_tokens": 1,
+                    "total_tokens": 2,
+                    "requests": 1,
+                }
+            }
+        )
+    )
+
+    result = TaskResult(task_type="Task", task_idx=0)
+    result.evidence_dir = str(bundle)
+    result.usage_totals = {"total_tokens": 15, "requests": 3}
+
+    _write_episode_manifest(result, {"run_id": "r1"})
+
+    manifest = json.loads((bundle / "episode.json").read_text())
+    assert manifest["usage_totals"]["requests"] == 3
+    assert result.usage_totals["requests"] == 3
 
 
 def test_episode_manifest_skips_a_missing_bundle(tmp_path):
@@ -1270,6 +1365,33 @@ def test_agent_declared_failure_stays_error_free():
     assert result.error is None
     assert env.finish_calls == 1
     assert env.finish_declared_done == [True]
+
+
+def test_usage_requests_are_recorded_from_the_agent_result():
+    final = _episode(
+        EpisodeState.SUCCEEDED,
+        result=EpisodeResult(
+            success=True,
+            declared_done=True,
+            steps=4,
+            usage=TokenUsage(
+                prompt_tokens=10,
+                completion_tokens=5,
+                total_tokens=15,
+                requests=3,
+            ),
+        ),
+    )
+    result, _, _ = _run_one_case(final)
+
+    # Same key names the benchmark runner writes, including the request count
+    # the summary sums into total_requests.
+    assert result.usage_totals == {
+        "request_tokens": 10,
+        "response_tokens": 5,
+        "total_tokens": 15,
+        "requests": 3,
+    }
 
 
 def test_cancelled_episode_sets_error_and_is_not_scored():

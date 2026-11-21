@@ -365,6 +365,7 @@ class EpisodeRuntime:
             "prompt_tokens": request_tokens,
             "completion_tokens": response_tokens,
             "total_tokens": int(totals.get("total_tokens", 0) or 0),
+            "requests": int(totals.get("requests", 0) or 0),
         }
 
     # -- event stream ------------------------------------------------------

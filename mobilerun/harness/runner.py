@@ -360,6 +360,7 @@ async def _run_one(
                     "request_tokens": run.usage.prompt_tokens,
                     "response_tokens": run.usage.completion_tokens,
                     "total_tokens": run.usage.total_tokens,
+                    "requests": int(run.usage.requests or 0),
                 }
 
         if result.error is None:
@@ -941,12 +942,26 @@ def _write_episode_manifest(result: TaskResult, run_meta: Dict[str, Any]) -> Non
     if timeline_exists:
         try:
             timeline = json.loads((bundle / "timeline.json").read_text())
-            usage_totals = timeline.get("usage_totals") or usage_totals
-            if result.usage_totals is not None:
-                # runbench rows carry the request count too; the summary sums it.
-                result.usage_totals["requests"] = int(
-                    (usage_totals or {}).get("requests", 0)
+            timeline_totals = timeline.get("usage_totals") or {}
+            # A policy that never emits per-call usage events (jev-mobile)
+            # leaves the timeline all zeros; keeping the episode result is
+            # better than replacing real counts with zeros.
+            if (
+                timeline_totals.get("total_tokens")
+                or timeline_totals.get("requests")
+            ):
+                usage_totals = dict(timeline_totals)
+            if usage_totals is not None:
+                # runbench rows carry the request count too; the summary sums
+                # it. Never let an empty or smaller timeline lower a real
+                # count, and keep the manifest and the row in agreement.
+                usage_totals = dict(usage_totals)
+                usage_totals["requests"] = max(
+                    int((result.usage_totals or {}).get("requests") or 0),
+                    int(timeline_totals.get("requests") or 0),
                 )
+                if result.usage_totals is not None:
+                    result.usage_totals["requests"] = usage_totals["requests"]
         except Exception:  # noqa: BLE001 - evidence is best effort
             pass
 

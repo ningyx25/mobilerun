@@ -305,8 +305,12 @@ outer retry. Only the final row is persisted; it records `attempts` (1 = no
 retry, capacity polling not counted), and the run metadata records `max_retry`
 (both at the top level and in each `runs[]` entry). `duration_s`, token usage
 and therefore `summary.total_runtime_s`/`total_tokens` reflect only the final
-attempt. Failed attempts keep their own evidence bundle (the agent service names
-it by `episode_id`), but only the final attempt gets a completed `episode.json`.
+attempt. Token usage covers every model tier a policy calls (for jev-mobile:
+planner responses plus executor decisions), and `summary.total_requests` counts
+those logical model calls — one per planner response and one per executor
+decision; transport/SDK retries are not counted. Failed attempts keep their own
+evidence bundle (the agent service names it by `episode_id`), but only the final
+attempt gets a completed `episode.json`.
 
 A worker is just the FastAPI app from `create_agent_app`; this project ships the
 factory, not a CLI command for it:
